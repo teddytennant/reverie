@@ -88,6 +88,26 @@ struct Config {
     out: Option<String>,
 }
 
+/// Directed reachability. Every emitted label is checked with this instead of
+/// being taken on faith from the construction.
+fn reachable(adj: &[Vec<usize>], src: usize, dst: usize) -> bool {
+    let mut seen = vec![false; adj.len()];
+    let mut stack = vec![src];
+    seen[src] = true;
+    while let Some(u) = stack.pop() {
+        if u == dst {
+            return true;
+        }
+        for &w in &adj[u] {
+            if !seen[w] {
+                seen[w] = true;
+                stack.push(w);
+            }
+        }
+    }
+    false
+}
+
 fn gen_instance(id: usize, rng: &mut Rng, cfg: &Config) -> Instance {
     // Two disjoint id ranges keep the components apart by construction: the
     // source component (backbone plus traps) and the decoy component holding
@@ -148,7 +168,10 @@ fn gen_instance(id: usize, rng: &mut Rng, cfg: &Config) -> Instance {
     }
     let t_neg = decoy[rng.below(n_decoy)];
 
-    // Shuffle ids so position gives nothing away.
+    // Check both labels, then shuffle ids so position gives nothing away.
+    assert!(reachable(&adj, source, t_pos), "t_pos must be reachable");
+    assert!(!reachable(&adj, source, t_neg), "t_neg must be unreachable");
+
     let mut perm: Vec<usize> = (0..total).collect();
     rng.shuffle(&mut perm);
     // inverse map old->new
@@ -267,4 +290,55 @@ fn main() -> std::io::Result<()> {
         cfg.n, cfg.seed, cfg.hops, cfg.branch, cfg.trap_depth
     );
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_cfg() -> Config {
+        Config { n: 0, seed: 0, hops: 4, branch: 2, trap_depth: 2, out: None }
+    }
+
+    fn instance_bytes(seed: u64, id: usize, cfg: &Config) -> Vec<u8> {
+        let mut rng = Rng::new(seed ^ 0x9E3779B97F4A7C15u64.wrapping_mul(id as u64 + 1));
+        let inst = gen_instance(id, &mut rng, cfg);
+        let mut buf = Vec::new();
+        write_instance(&mut buf, &inst).unwrap();
+        buf
+    }
+
+    #[test]
+    fn determinism_same_seed_same_bytes() {
+        let cfg = test_cfg();
+        for id in 0..50 {
+            assert_eq!(instance_bytes(7, id, &cfg), instance_bytes(7, id, &cfg),
+                       "instance {id} must be byte-reproducible");
+        }
+    }
+
+    #[test]
+    fn different_seed_differs() {
+        let cfg = test_cfg();
+        assert_ne!(instance_bytes(1, 0, &cfg), instance_bytes(2, 0, &cfg));
+    }
+
+    #[test]
+    fn labels_are_bfs_verified() {
+        let cfg = test_cfg();
+        for id in 0..300 {
+            let mut rng = Rng::new(3 ^ 0x9E3779B97F4A7C15u64.wrapping_mul(id as u64 + 1));
+            let inst = gen_instance(id, &mut rng, &cfg);
+            let mut adj = vec![Vec::new(); inst.n_entities];
+            for &(a, b) in &inst.edges {
+                adj[a].push(b);
+            }
+            let ans = inst.answer;
+            let decoy = if inst.candidates[0] == ans { inst.candidates[1] } else { inst.candidates[0] };
+            assert!(reachable(&adj, inst.source, ans), "answer must be reachable from source");
+            assert!(!reachable(&adj, inst.source, decoy), "decoy must NOT be reachable");
+            assert_eq!(*inst.gold_path.first().unwrap(), inst.source);
+            assert_eq!(*inst.gold_path.last().unwrap(), ans);
+        }
+    }
 }
