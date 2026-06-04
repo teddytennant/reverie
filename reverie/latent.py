@@ -13,13 +13,13 @@ The answer is a single concept token, so the answer distribution after ``m``
 thoughts is the tied LM head applied to ``y_m``, and all ``K+1`` depths fall out
 of one batched matmul.
 
-The answer loss is PonderNet's expected loss over depth,
+Training is single-stage and differentiable, no RL and no curriculum:
 
-    L = Σ_m p_m · CE(answer, W y_m)
+    L = Σ_m p_m · CE(answer, W y_m)                     # PonderNet expected loss
+      + α · Σ_{i=1}^{k} CE(path[i], W y_i)              # trajectory distillation
 
-with p_m the halting distribution over depth m∈{0..K}. With ``adaptive=False``
-the read-out is taken at fixed depth K instead, which is Coconut without the
-curriculum.
+p_m is the PonderNet halting distribution over depth m∈{0..K}. Turning α off at
+fixed depth recovers curriculum-free Coconut.
 """
 
 from __future__ import annotations
@@ -43,6 +43,7 @@ class ReverieConfig:
     max_steps: int = 6            # K: number of latent thought slots
     method: str = "reverie"       # reverie | coconut | coconut_distill
     adaptive: bool = True         # learned halting distribution vs fixed depth K
+    alpha_traj: float = 1.0       # trajectory-distillation weight
 
 
 class ReverieModel(eqx.Module):
@@ -126,8 +127,8 @@ def _answer_ce(logits: Float[Array, "k1 v"], answer: int) -> Float[Array, " k1"]
 
 
 def reverie_example_loss(model, prompt_embeds, prompt_valid, answer,
-                         cfg: ReverieConfig):
-    """Answer loss for one example under the halting distribution."""
+                         path_targets, path_len, n_hops, cfg: ReverieConfig):
+    """Full Reverie objective for one example. Returns (loss, aux dict)."""
     K = cfg.max_steps
     Y = latent_unroll(model, prompt_embeds, prompt_valid, K)   # [K+1, d]
     logits = model.project(Y)                                  # [K+1, V]
@@ -141,7 +142,17 @@ def reverie_example_loss(model, prompt_embeds, prompt_valid, answer,
     else:
         l_task = ce[K]                                          # fixed depth K
 
-    loss = l_task
+    # trajectory distillation: read-out y_i should decode to path node i, i=1..k
+    if cfg.alpha_traj > 0.0:
+        idx = jnp.arange(1, K + 1)                             # y_1..y_K
+        tgt = jnp.where(idx <= path_len, path_targets[jnp.minimum(idx - 1, K - 1)], 0)
+        step_ce = optax.softmax_cross_entropy_with_integer_labels(logits[1:], tgt)
+        mask = (idx <= path_len).astype(jnp.float32)
+        l_traj = jnp.sum(step_ce * mask) / jnp.maximum(mask.sum(), 1.0)
+    else:
+        l_traj = jnp.zeros(())
+
+    loss = l_task + cfg.alpha_traj * l_traj
     expected_depth = jnp.sum(p * jnp.arange(K + 1))
     # adaptive: MAP halt depth readout; non-adaptive: full-depth K (matches l_task)
     if cfg.adaptive:
@@ -149,7 +160,7 @@ def reverie_example_loss(model, prompt_embeds, prompt_valid, answer,
         pred = jnp.argmax(logits[nstar])
     else:
         pred = jnp.argmax(logits[K])
-    aux = dict(l_task=l_task,
+    aux = dict(l_task=l_task, l_traj=l_traj,
                expected_depth=expected_depth, correct=(pred == answer).astype(jnp.float32))
     return loss, aux
 
@@ -160,8 +171,11 @@ def batch_loss(model: ReverieModel, batch: dict, cfg: ReverieConfig):
     embeds = jax.vmap(model.embed)(batch["prompt_ids"])         # [B, Sp, d]
     valid = batch["prompt_mask"]
 
-    f = lambda e, v, a: reverie_example_loss(model, e, v, a, cfg)
-    losses, auxes = jax.vmap(f)(embeds, valid, batch["answer"])
+    f = lambda e, v, a, pt, pl, nh: reverie_example_loss(
+        model, e, v, a, pt, pl, nh, cfg)
+    losses, auxes = jax.vmap(f)(
+        embeds, valid, batch["answer"], batch["path_targets"],
+        batch["path_len"], batch["n_hops"])
 
     loss = jnp.mean(losses)
     aux = {k: jnp.mean(v) for k, v in auxes.items()}
