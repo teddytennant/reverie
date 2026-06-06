@@ -13,13 +13,18 @@ The answer is a single concept token, so the answer distribution after ``m``
 thoughts is the tied LM head applied to ``y_m``, and all ``K+1`` depths fall out
 of one batched matmul.
 
-Training is single-stage and differentiable, no RL and no curriculum:
+Training is single-stage and differentiable, no RL and no curriculum. Four
+terms, each toggleable for ablations:
 
     L = Σ_m p_m · CE(answer, W y_m)                     # PonderNet expected loss
       + α · Σ_{i=1}^{k} CE(path[i], W y_i)              # trajectory distillation
+      + γ · (−log p_k)                                  # halt at teacher depth k
+      + β · KL(p ‖ Geometric(λ_prior))                  # anti-collapse compute prior (training)
 
-p_m is the PonderNet halting distribution over depth m∈{0..K}. Turning α off at
-fixed depth recovers curriculum-free Coconut.
+p_m is the PonderNet halting distribution over depth m∈{0..K}; k = n_hops is
+the teacher's reasoning depth for that instance. Turning flags off recovers
+curriculum-free Coconut (α=0, non-adaptive) and trajectory-distilled
+fixed-depth Coconut (α>0, non-adaptive).
 """
 
 from __future__ import annotations
@@ -44,6 +49,9 @@ class ReverieConfig:
     method: str = "reverie"       # reverie | coconut | coconut_distill
     adaptive: bool = True         # learned halting distribution vs fixed depth K
     alpha_traj: float = 1.0       # trajectory-distillation weight
+    gamma_halt: float = 1.0       # depth-supervision weight (halt at n_hops)
+    beta_reg: float = 0.01        # KL-to-geometric-prior weight (training anti-collapse)
+    lambda_prior: float = 0.2     # geometric prior halt rate; untruncated E[depth]=(1-λ)/λ on {0,1,...}
 
 
 class ReverieModel(eqx.Module):
@@ -119,6 +127,17 @@ def halting_distribution(lam: Float[Array, " k1"]) -> Float[Array, " k1"]:
     return lam * prefix
 
 
+def geometric_prior(n: int, lam_p: float) -> Float[Array, " n"]:
+    """Geom(λ) over {0..n-1}, truncated and renormalized.
+
+    0-indexed because depth 0 is a real option here: answer off the prompt with
+    no thoughts at all.
+    """
+    m = jnp.arange(n)
+    g = lam_p * (1.0 - lam_p) ** m
+    return g / g.sum()
+
+
 # ---- per-example loss cores --------------------------------------------------
 def _answer_ce(logits: Float[Array, "k1 v"], answer: int) -> Float[Array, " k1"]:
     return optax.softmax_cross_entropy_with_integer_labels(
@@ -152,7 +171,21 @@ def reverie_example_loss(model, prompt_embeds, prompt_valid, answer,
     else:
         l_traj = jnp.zeros(())
 
-    loss = l_task + cfg.alpha_traj * l_traj
+    # depth supervision: halt exactly at the teacher's per-instance depth
+    if cfg.adaptive and cfg.gamma_halt > 0.0:
+        k = jnp.clip(n_hops, 0, K)
+        l_halt = -jnp.log(p[k] + _EPS)
+    else:
+        l_halt = jnp.zeros(())
+
+    # anti-collapse compute prior (training); inference Pareto dial is halt_bias
+    if cfg.adaptive and cfg.beta_reg > 0.0:
+        g = geometric_prior(K + 1, cfg.lambda_prior)
+        l_reg = jnp.sum(p * (jnp.log(p + _EPS) - jnp.log(g + _EPS)))
+    else:
+        l_reg = jnp.zeros(())
+
+    loss = l_task + cfg.alpha_traj * l_traj + cfg.gamma_halt * l_halt + cfg.beta_reg * l_reg
     expected_depth = jnp.sum(p * jnp.arange(K + 1))
     # adaptive: MAP halt depth readout; non-adaptive: full-depth K (matches l_task)
     if cfg.adaptive:
@@ -160,7 +193,7 @@ def reverie_example_loss(model, prompt_embeds, prompt_valid, answer,
         pred = jnp.argmax(logits[nstar])
     else:
         pred = jnp.argmax(logits[K])
-    aux = dict(l_task=l_task, l_traj=l_traj,
+    aux = dict(l_task=l_task, l_traj=l_traj, l_halt=l_halt, l_reg=l_reg,
                expected_depth=expected_depth, correct=(pred == answer).astype(jnp.float32))
     return loss, aux
 
