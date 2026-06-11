@@ -55,7 +55,7 @@ def gen_split(n, seed, hops_list, branch, trap_depth):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--method", default="reverie",
-                    choices=["reverie", "coconut", "coconut_distill"])
+                    choices=["reverie", "coconut", "coconut_distill", "nocot", "cot"])
     ap.add_argument("--adaptive", type=int, default=-1,
                     help="-1=default per method; 0/1 override")
     ap.add_argument("--alpha", type=float, default=1.0)
@@ -97,8 +97,8 @@ def main():
           f"hops={hops_list} | vocab {vocab.size} | max_entities {max_ent} | "
           f"prompt_len {plen} cot_len {clen}")
 
-    adaptive = {"reverie": True, "coconut": False,
-                "coconut_distill": False}[args.method]
+    adaptive = {"reverie": True, "coconut": False, "coconut_distill": False,
+                "nocot": False, "cot": False}[args.method]
     if args.adaptive in (0, 1):
         adaptive = bool(args.adaptive)
     # coconut = fixed depth, answer only (no traj/halt); coconut_distill adds traj

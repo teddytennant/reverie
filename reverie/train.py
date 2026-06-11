@@ -1,8 +1,14 @@
 """Training and evaluation harness (Optax, Equinox).
 
 ``ReverieConfig.method`` picks the objective and one training path covers all of
-them. Evaluation unrolls to the halted (or fixed) depth and takes the tied-head
-argmax there, and also reports the latent steps actually spent.
+them. Evaluation can't be shared the same way, since each method answers a
+question differently:
+
+  reverie / coconut: latent unroll to the halted (or fixed) depth, answer is the
+    tied-head argmax there. Also reports the latent steps actually spent.
+  nocot: answer straight off the prompt's last hidden.
+  cot: greedy generation of the chain, then read the answer concept token. No
+    teacher forcing, so the chain has to hold up on its own.
 """
 
 from __future__ import annotations
@@ -15,7 +21,7 @@ import jax.numpy as jnp
 import numpy as np
 import optax
 
-from reverie.data import Vocab, collate, global_lengths
+from reverie.data import ANS, Vocab, collate, global_lengths
 from reverie.latent import (
     ReverieConfig,
     ReverieModel,
@@ -89,6 +95,53 @@ def _predict_latent(model, prompt_ids, prompt_mask, cands, K, adaptive, eps, hal
     return jax.vmap(one)(prompt_ids, prompt_mask, cands)
 
 
+@eqx.filter_jit
+def _predict_nocot(model, prompt_ids, prompt_mask, cands):
+    def one(pid, pmask, cand):
+        embeds = model.embed(pid)
+        row = model.project(latent_unroll(model, embeds, pmask, 0))[0]
+        return cand[jnp.argmax(row[cand])]
+
+    return jax.vmap(one)(prompt_ids, prompt_mask, cands)
+
+
+@eqx.filter_jit
+def _cot_generate(model, prompt_ids, prompt_mask, cands, gen_len):
+    """Greedy-decode the reasoning after the left-padded prompt.
+
+    Returns (gen [B, gen_len], cand_pred [B, gen_len]). gen[t] is the greedy
+    token at position Sp+t and feeds the next step; cand_pred[t] is the same
+    position's argmax restricted to the two candidates, carried alongside so the
+    answer gets scored as the same two-way choice the latent methods face, still
+    conditioned on the chain CoT generated for itself.
+    """
+    B, Sp = prompt_ids.shape
+
+    def one(pid, pmask, cand):
+        ids = jnp.concatenate([pid, jnp.zeros((gen_len,), jnp.int32)])
+        valid = jnp.concatenate([pmask, jnp.zeros((gen_len,))])
+        L = Sp + gen_len
+        positions = jnp.arange(L)
+        causal = jnp.arange(L)[:, None] >= jnp.arange(L)[None, :]
+
+        def step(carry, t):
+            ids, valid = carry
+            allowed = causal & (valid[None, :] > 0)
+            mask = jnp.where(allowed, 0.0, -1e30)
+            H = model.transformer.backbone(model.embed(ids), positions, mask)
+            row = model.project(H)[Sp + t - 1]               # logits for position Sp+t
+            nxt = jnp.argmax(row)                             # greedy token (continues gen)
+            candp = cand[jnp.argmax(row[cand])]              # candidate-restricted pred
+            ids = ids.at[Sp + t].set(nxt)
+            valid = valid.at[Sp + t].set(1.0)
+            return (ids, valid), (nxt, candp)
+
+        (ids, _), (gen, candp) = jax.lax.scan(step, (ids, valid), jnp.arange(gen_len))
+        return gen, candp
+
+    return jax.vmap(one)(prompt_ids, prompt_mask, cands)
+
+
 def _spearman(a: np.ndarray, b: np.ndarray) -> float:
     if len(a) < 2 or np.std(a) == 0 or np.std(b) == 0:
         return 0.0
@@ -102,6 +155,8 @@ def evaluate(model, insts, vocab: Vocab, cfg: ReverieConfig,
              prompt_len: int | None = None, cot_len: int | None = None,
              halt_bias: float = 0.0) -> dict:
     K = cfg.max_steps
+    # fixed gen length for the whole eval call (compile CoT generation once)
+    cot_gen_len = int(max(h["n_hops"] for h in insts)) * 6 + 4
     preds, steps, answers, hops = [], [], [], []
     for start in range(0, len(insts), batch_size):
         chunk = insts[start : start + batch_size]
@@ -110,8 +165,22 @@ def evaluate(model, insts, vocab: Vocab, cfg: ReverieConfig,
         pmask = jnp.asarray(b.prompt_mask)
         cands = jnp.asarray([[vocab.concept_id(c) for c in it["candidates"]]
                              for it in chunk], dtype=jnp.int32)
-        pr, st = _predict_latent(model, pid, pmask, cands, K, cfg.adaptive, eps, halt_bias)
-        pr, st = np.asarray(pr), np.asarray(st)
+        if cfg.method == "nocot":
+            pr = np.asarray(_predict_nocot(model, pid, pmask, cands))
+            st = np.zeros(len(chunk), np.int32)
+        elif cfg.method == "cot":
+            gen_len = cot_gen_len
+            gen, candp = _cot_generate(model, pid, pmask, cands, gen_len)
+            gen, candp = np.asarray(gen), np.asarray(candp)
+            pr = np.zeros(len(chunk), np.int32)
+            for i, row in enumerate(gen):
+                w = np.where(row == ANS)[0]
+                # answer = candidate preferred at the position right after CoT's <ans>
+                pr[i] = candp[i, w[0] + 1] if len(w) and w[0] + 1 < gen_len else -1
+            st = np.full(len(chunk), gen_len, np.int32)
+        else:
+            pr, st = _predict_latent(model, pid, pmask, cands, K, cfg.adaptive, eps, halt_bias)
+            pr, st = np.asarray(pr), np.asarray(st)
         preds.extend(pr.tolist())
         steps.extend(st.tolist())
         answers.extend(b.answer.tolist())

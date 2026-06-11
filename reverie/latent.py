@@ -23,8 +23,8 @@ terms, each toggleable for ablations:
 
 p_m is the PonderNet halting distribution over depth m∈{0..K}; k = n_hops is
 the teacher's reasoning depth for that instance. Turning flags off recovers
-curriculum-free Coconut (α=0, non-adaptive) and trajectory-distilled
-fixed-depth Coconut (α>0, non-adaptive).
+curriculum-free Coconut (α=0, non-adaptive), trajectory-distilled fixed-depth
+Coconut (α>0, non-adaptive), and No-CoT (K=0).
 """
 
 from __future__ import annotations
@@ -46,7 +46,7 @@ _EPS = 1e-6
 @dataclasses.dataclass(frozen=True)
 class ReverieConfig:
     max_steps: int = 6            # K: number of latent thought slots
-    method: str = "reverie"       # reverie | coconut | coconut_distill
+    method: str = "reverie"       # reverie | coconut | coconut_distill | nocot | cot
     adaptive: bool = True         # learned halting distribution vs fixed depth K
     alpha_traj: float = 1.0       # trajectory-distillation weight
     gamma_halt: float = 1.0       # depth-supervision weight (halt at n_hops)
@@ -198,17 +198,54 @@ def reverie_example_loss(model, prompt_embeds, prompt_valid, answer,
     return loss, aux
 
 
+def nocot_example_loss(model, prompt_embeds, prompt_valid, answer, **_):
+    Y = latent_unroll(model, prompt_embeds, prompt_valid, 0)   # [1, d]
+    logits = model.project(Y)[0]
+    loss = optax.softmax_cross_entropy_with_integer_labels(logits[None], jnp.array([answer]))[0]
+    aux = dict(correct=(jnp.argmax(logits) == answer).astype(jnp.float32),
+               expected_depth=jnp.zeros(()))
+    return loss, aux
+
+
+def cot_example_loss(model, cot_ids, cot_mask, cot_loss_mask):
+    """Standard next-token LM loss over prompt+steps+answer (CoT baseline)."""
+    L = cot_ids.shape[0]
+    positions = jnp.arange(L)
+    causal = jnp.arange(L)[:, None] >= jnp.arange(L)[None, :]
+    allowed = causal & (cot_mask[None, :] > 0)
+    add_mask = jnp.where(allowed, 0.0, _NEG_INF)
+    embeds = model.embed(cot_ids)
+    H = model.transformer.backbone(embeds, positions, add_mask)
+    logits = model.project(H)                                  # [L, V]
+    # predict token t+1 from position t
+    tgt = cot_ids[1:]
+    lm_logits = logits[:-1]
+    ce = optax.softmax_cross_entropy_with_integer_labels(lm_logits, tgt)
+    m = cot_loss_mask[1:]
+    loss = jnp.sum(ce * m) / jnp.maximum(m.sum(), 1.0)
+    # no accuracy here; CoT is scored by generating the chain in train.evaluate
+    aux = dict(correct=jnp.zeros(()), expected_depth=jnp.zeros(()))
+    return loss, aux
+
+
 # ---- batched loss ------------------------------------------------------------
 def batch_loss(model: ReverieModel, batch: dict, cfg: ReverieConfig):
-    """Mean loss over a batch (dict of jnp arrays)."""
+    """Mean loss over a batch (dict of jnp arrays). Dispatches on cfg.method."""
     embeds = jax.vmap(model.embed)(batch["prompt_ids"])         # [B, Sp, d]
     valid = batch["prompt_mask"]
 
-    f = lambda e, v, a, pt, pl, nh: reverie_example_loss(
-        model, e, v, a, pt, pl, nh, cfg)
-    losses, auxes = jax.vmap(f)(
-        embeds, valid, batch["answer"], batch["path_targets"],
-        batch["path_len"], batch["n_hops"])
+    if cfg.method == "cot":
+        vloss = lambda i, m, lm: cot_example_loss(model, i, m, lm)
+        losses, auxes = jax.vmap(vloss)(batch["cot_ids"], batch["cot_mask"], batch["cot_loss_mask"])
+    elif cfg.method == "nocot":
+        f = lambda e, v, a: nocot_example_loss(model, e, v, a)
+        losses, auxes = jax.vmap(f)(embeds, valid, batch["answer"])
+    else:
+        f = lambda e, v, a, pt, pl, nh: reverie_example_loss(
+            model, e, v, a, pt, pl, nh, cfg)
+        losses, auxes = jax.vmap(f)(
+            embeds, valid, batch["answer"], batch["path_targets"],
+            batch["path_len"], batch["n_hops"])
 
     loss = jnp.mean(losses)
     aux = {k: jnp.mean(v) for k, v in auxes.items()}
