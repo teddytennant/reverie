@@ -29,16 +29,17 @@ BIN = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                    "data-gen", "target", "release", "reverie-datagen")
 
 
-def gen(n, seed, hops, branch, trap_depth):
+def gen(n, seed, hops, branch, trap_depth, connect=0):
     out = subprocess.run(
         [BIN, "--n", str(n), "--seed", str(seed), "--hops", str(hops),
-         "--branch", str(branch), "--trap-depth", str(trap_depth)],
+         "--branch", str(branch), "--trap-depth", str(trap_depth),
+         "--connect", str(connect)],
         capture_output=True, text=True, check=True,
     ).stdout
     return [json.loads(line) for line in out.strip().split("\n")]
 
 
-def gen_split(n, seed, hops_list, branch, trap_depth):
+def gen_split(n, seed, hops_list, branch, trap_depth, connect=0):
     """Generate n instances. With more than one value in hops_list, mix the
     depths evenly so the split spans a range of reasoning depths."""
     base, rem = divmod(n, len(hops_list))
@@ -46,7 +47,7 @@ def gen_split(n, seed, hops_list, branch, trap_depth):
     insts = []
     for j, (h, c) in enumerate(zip(hops_list, counts)):
         if c:
-            insts += gen(c, seed + 100 * j, h, branch, trap_depth)
+            insts += gen(c, seed + 100 * j, h, branch, trap_depth, connect)
     import random
     random.Random(seed).shuffle(insts)
     return insts[:n]
@@ -71,6 +72,10 @@ def main():
                     help="comma list, e.g. '2,3,4,5', to mix depths; overrides --hops")
     ap.add_argument("--branch", type=int, default=2)
     ap.add_argument("--trap-depth", type=int, default=2)
+    ap.add_argument("--connect", type=int, default=0,
+                    help="cross-edges from decoys back to sources. Weakly connects the graph so "
+                         "component membership stops working as a shortcut and the answer needs "
+                         "directed reachability")
     ap.add_argument("--max-steps", type=int, default=8)
     ap.add_argument("--d-model", type=int, default=256)
     ap.add_argument("--layers", type=int, default=6)
@@ -86,9 +91,9 @@ def main():
     t0 = time.time()
     print(f"jax backend={jax.default_backend()} devices={jax.devices()}")
     hops_list = [int(h) for h in args.hops_mix.split(",")] if args.hops_mix else [args.hops]
-    train_insts = gen_split(args.n_train, 1000 + args.seed, hops_list, args.branch, args.trap_depth)
-    val_insts = gen_split(args.n_val, 7000 + args.seed, hops_list, args.branch, args.trap_depth)
-    test_insts = gen_split(args.n_test, 9000 + args.seed, hops_list, args.branch, args.trap_depth)
+    train_insts = gen_split(args.n_train, 1000 + args.seed, hops_list, args.branch, args.trap_depth, args.connect)
+    val_insts = gen_split(args.n_val, 7000 + args.seed, hops_list, args.branch, args.trap_depth, args.connect)
+    test_insts = gen_split(args.n_test, 9000 + args.seed, hops_list, args.branch, args.trap_depth, args.connect)
 
     max_ent = max(i["n_entities"] for i in train_insts + val_insts + test_insts)
     vocab = build_vocab(max_concepts=max_ent + 1)

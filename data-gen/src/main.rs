@@ -85,6 +85,9 @@ struct Config {
     hops: usize,     // length of the true reasoning path
     branch: usize,   // distractor edges per path node
     trap_depth: usize, // how deep distractor chains go
+    connect: usize,  // decoy->source cross-edges: weakly-connect the graph so a
+                     // component-membership check can't tell the two candidates
+                     // apart. Labels are unaffected; see gen_instance.
     out: Option<String>,
 }
 
@@ -111,7 +114,7 @@ fn reachable(adj: &[Vec<usize>], src: usize, dst: usize) -> bool {
 fn gen_instance(id: usize, rng: &mut Rng, cfg: &Config) -> Instance {
     // Two disjoint id ranges keep the components apart by construction: the
     // source component (backbone plus traps) and the decoy component holding
-    // the unreachable candidate. Edges never cross between the ranges.
+    // the unreachable candidate. Only the --connect edges cross between them.
     let path_len = cfg.hops + 1;
     let n_traps = cfg.branch * cfg.hops * cfg.trap_depth + cfg.branch;
     let n_decoy = cfg.hops + 2; // decoy gets its own plausible hierarchy
@@ -167,6 +170,19 @@ fn gen_instance(id: usize, rng: &mut Rng, cfg: &Config) -> Instance {
         add(&mut edges, &mut adj, decoy[i], decoy[i + 1]);
     }
     let t_neg = decoy[rng.below(n_decoy)];
+
+    // Cross-edges, decoy->source. They point into the source component and
+    // never out of it, so what the source can reach doesn't change and t_neg
+    // stays unreachable. What does change: the graph is now one weakly
+    // connected blob, so "which component is the source in" stops separating
+    // the two candidates and only directed reachability answers it.
+    for _ in 0..cfg.connect {
+        let u = decoy_base + rng.below(n_decoy);      // a decoy-component node
+        let v = src_base + rng.below(src_count);      // a source-component node
+        if u != v {
+            add(&mut edges, &mut adj, u, v);
+        }
+    }
 
     // Check both labels, then shuffle ids so position gives nothing away.
     assert!(reachable(&adj, source, t_pos), "t_pos must be reachable");
@@ -243,6 +259,7 @@ fn parse_args() -> Config {
         hops: 4,
         branch: 2,
         trap_depth: 2,
+        connect: 0,
         out: None,
     };
     let args: Vec<String> = std::env::args().collect();
@@ -256,9 +273,10 @@ fn parse_args() -> Config {
             "--hops" => cfg.hops = val().parse().unwrap(),
             "--branch" => cfg.branch = val().parse().unwrap(),
             "--trap-depth" => cfg.trap_depth = val().parse().unwrap(),
+            "--connect" => cfg.connect = val().parse().unwrap(),
             "--out" => cfg.out = Some(val()),
             "--help" | "-h" => {
-                eprintln!("reverie-datagen --n N --seed S --hops H --branch B --trap-depth D --out FILE");
+                eprintln!("reverie-datagen --n N --seed S --hops H --branch B --trap-depth D --connect C --out FILE");
                 std::process::exit(0);
             }
             other => panic!("unknown arg: {other}"),
@@ -297,7 +315,7 @@ mod tests {
     use super::*;
 
     fn test_cfg() -> Config {
-        Config { n: 0, seed: 0, hops: 4, branch: 2, trap_depth: 2, out: None }
+        Config { n: 0, seed: 0, hops: 4, branch: 2, trap_depth: 2, connect: 0, out: None }
     }
 
     fn instance_bytes(seed: u64, id: usize, cfg: &Config) -> Vec<u8> {
@@ -339,6 +357,26 @@ mod tests {
             assert!(!reachable(&adj, inst.source, decoy), "decoy must NOT be reachable");
             assert_eq!(*inst.gold_path.first().unwrap(), inst.source);
             assert_eq!(*inst.gold_path.last().unwrap(), ans);
+        }
+    }
+
+    #[test]
+    fn cross_edges_preserve_labels() {
+        // The cross-edges make the graph weakly connected. The source still
+        // must not reach the decoy.
+        let mut cfg = test_cfg();
+        cfg.connect = 4;
+        for id in 0..300 {
+            let mut rng = Rng::new(9 ^ 0x9E3779B97F4A7C15u64.wrapping_mul(id as u64 + 1));
+            let inst = gen_instance(id, &mut rng, &cfg);
+            let mut adj = vec![Vec::new(); inst.n_entities];
+            for &(a, b) in &inst.edges {
+                adj[a].push(b);
+            }
+            let ans = inst.answer;
+            let decoy = if inst.candidates[0] == ans { inst.candidates[1] } else { inst.candidates[0] };
+            assert!(reachable(&adj, inst.source, ans));
+            assert!(!reachable(&adj, inst.source, decoy), "decoy must stay unreachable with cross-edges");
         }
     }
 }
