@@ -124,4 +124,9 @@ pays a decoding penalty — so we do not headline them; see §6.)*
 
 ## 7. Reproducibility
 
-Seeded Rust generator (byte-reproducible), fixed-shape JAX (single compile), data/RNG as pure functions of (seed, step). `python scripts/matrix.py --seeds 0,1,2` reproduces §5.
+Seeded Rust generator (byte-reproducible), fixed-shape JAX (single compile), train/val/test held out by *distinct seeds* (no row leakage). The §5 calibration and ablation tables reproduce with:
+```bash
+bash scripts/phase0.sh          # full Reverie + γ=0 / α=0 ablations + search regime
+python scripts/ablation_table.py
+```
+Every run writes a self-describing JSON blob (config, test metrics, per-hop breakdown) under `runs/`.
