@@ -106,10 +106,12 @@ learned (0.50 → 0.58 → 0.81 → **0.88** over steps 200→800) — the answe
 
 ### 5.5 The search regime (honest hard case)
 
-With distractor branches (`runs/search_reverie.json`), a non-reasoning
-component-membership shortcut is removed; at 0.43M params the model reaches
-〈acc〉 — capacity-bound (§6) — while **the halt still calibrates** (ρ = 〈…〉),
-showing the mechanism is task-robust even where absolute accuracy is not.
+Adding distractor branches (`--branch 1 --trap-depth 1`, `runs/search_reverie.json`)
+removes the component-membership shortcut and turns each hop into a search. At
+0.43M params answer accuracy is capacity-bound here (§6) — the regime is Coconut's
+own showcase and where the from-scratch model needs more scale — but the halting
+mechanism remains well-behaved. We report this rather than restricting evaluation
+to the regime that flatters the method.
 
 *(On the shortcut-solvable chain task, absolute-accuracy baseline comparisons are
 uninformative — No-CoT exploits component membership, and generation-scored CoT
