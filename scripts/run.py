@@ -30,22 +30,23 @@ BIN = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                    "data-gen", "target", "release", "reverie-datagen")
 
 
-def gen(n, seed, hops, branch, trap_depth):
+def gen(n, seed, hops, branch, trap_depth, connect=0):
     out = subprocess.run(
         [BIN, "--n", str(n), "--seed", str(seed), "--hops", str(hops),
-         "--branch", str(branch), "--trap-depth", str(trap_depth)],
+         "--branch", str(branch), "--trap-depth", str(trap_depth),
+         "--connect", str(connect)],
         capture_output=True, text=True, check=True,
     ).stdout
     return [json.loads(line) for line in out.strip().split("\n")]
 
 
-def gen_split(n, seed, hops_list, branch, trap_depth):
+def gen_split(n, seed, hops_list, branch, trap_depth, connect=0):
     """Generate n instances; if hops_list has >1 value, mix them evenly
     (heterogeneous reasoning depth -> the calibration / depth-variance story)."""
     per = max(1, n // len(hops_list))
     insts = []
     for j, h in enumerate(hops_list):
-        insts += gen(per, seed + 100 * j, h, branch, trap_depth)
+        insts += gen(per, seed + 100 * j, h, branch, trap_depth, connect)
     import random
     random.Random(seed).shuffle(insts)
     return insts[:n] if len(insts) >= n else insts
@@ -70,6 +71,9 @@ def main():
                     help="comma list e.g. '2,3,4,5' for heterogeneous depth; overrides --hops")
     ap.add_argument("--branch", type=int, default=2)
     ap.add_argument("--trap-depth", type=int, default=2)
+    ap.add_argument("--connect", type=int, default=0,
+                    help="decoy->source cross-edges: weakly-connect the graph to kill the "
+                         "component-membership shortcut (forces directed-reachability reasoning)")
     ap.add_argument("--max-steps", type=int, default=8)
     ap.add_argument("--d-model", type=int, default=256)
     ap.add_argument("--layers", type=int, default=6)
@@ -85,9 +89,9 @@ def main():
     t0 = time.time()
     print(f"jax backend={jax.default_backend()} devices={jax.devices()}")
     hops_list = [int(h) for h in args.hops_mix.split(",")] if args.hops_mix else [args.hops]
-    train_insts = gen_split(args.n_train, 1000 + args.seed, hops_list, args.branch, args.trap_depth)
-    val_insts = gen_split(args.n_val, 7000 + args.seed, hops_list, args.branch, args.trap_depth)
-    test_insts = gen_split(args.n_test, 9000 + args.seed, hops_list, args.branch, args.trap_depth)
+    train_insts = gen_split(args.n_train, 1000 + args.seed, hops_list, args.branch, args.trap_depth, args.connect)
+    val_insts = gen_split(args.n_val, 7000 + args.seed, hops_list, args.branch, args.trap_depth, args.connect)
+    test_insts = gen_split(args.n_test, 9000 + args.seed, hops_list, args.branch, args.trap_depth, args.connect)
 
     max_ent = max(i["n_entities"] for i in train_insts + val_insts + test_insts)
     vocab = build_vocab(max_concepts=max_ent + 1)

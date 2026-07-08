@@ -86,6 +86,9 @@ struct Config {
     hops: usize,     // length of the true reasoning path
     branch: usize,   // distractor edges per path node
     trap_depth: usize, // how deep distractor chains go
+    connect: usize,  // decoy->source cross-edges: weakly-connect the graph so a
+                     // component-membership heuristic can't answer without tracing
+                     // directed reachability (label stays correct — see gen_instance)
     out: Option<String>,
 }
 
@@ -169,6 +172,20 @@ fn gen_instance(id: usize, rng: &mut Rng, cfg: &Config) -> Instance {
     }
     let t_neg = decoy[rng.below(n_decoy)];
 
+    // --- weakly connect the two components with decoy->source cross-edges.
+    // These point *into* the source component, so the source never traverses
+    // them outward: reachable(source, ·) is unchanged and t_neg stays
+    // unreachable. But now the whole graph is one weakly-connected blob, so a
+    // "which component is the source in" shortcut no longer separates the
+    // candidates — the model must trace *directed* reachability from the source.
+    for _ in 0..cfg.connect {
+        let u = decoy_base + rng.below(n_decoy);      // a decoy-component node
+        let v = src_base + rng.below(src_count);      // a source-component node
+        if u != v {
+            add(&mut edges, &mut adj, u, v);
+        }
+    }
+
     // --- verify labels, then shuffle entity ids so position leaks nothing.
     assert!(reachable(&adj, source, t_pos), "t_pos must be reachable");
     assert!(!reachable(&adj, source, t_neg), "t_neg must be unreachable");
@@ -246,6 +263,7 @@ fn parse_args() -> Config {
         hops: 4,
         branch: 2,
         trap_depth: 2,
+        connect: 0,
         out: None,
     };
     let args: Vec<String> = std::env::args().collect();
@@ -259,9 +277,10 @@ fn parse_args() -> Config {
             "--hops" => cfg.hops = val().parse().unwrap(),
             "--branch" => cfg.branch = val().parse().unwrap(),
             "--trap-depth" => cfg.trap_depth = val().parse().unwrap(),
+            "--connect" => cfg.connect = val().parse().unwrap(),
             "--out" => cfg.out = Some(val()),
             "--help" | "-h" => {
-                eprintln!("reverie-datagen --n N --seed S --hops H --branch B --trap-depth D --out FILE");
+                eprintln!("reverie-datagen --n N --seed S --hops H --branch B --trap-depth D --connect C --out FILE");
                 std::process::exit(0);
             }
             other => panic!("unknown arg: {other}"),
@@ -300,7 +319,7 @@ mod tests {
     use super::*;
 
     fn test_cfg() -> Config {
-        Config { n: 0, seed: 0, hops: 4, branch: 2, trap_depth: 2, out: None }
+        Config { n: 0, seed: 0, hops: 4, branch: 2, trap_depth: 2, connect: 0, out: None }
     }
 
     fn instance_bytes(seed: u64, id: usize, cfg: &Config) -> Vec<u8> {
@@ -342,6 +361,26 @@ mod tests {
             assert!(!reachable(&adj, inst.source, decoy), "decoy must NOT be reachable");
             assert_eq!(*inst.gold_path.first().unwrap(), inst.source);
             assert_eq!(*inst.gold_path.last().unwrap(), ans);
+        }
+    }
+
+    #[test]
+    fn cross_edges_preserve_labels() {
+        // With decoy->source cross-edges the graph is weakly connected, but the
+        // source still must NOT reach the decoy (directed reachability).
+        let mut cfg = test_cfg();
+        cfg.connect = 4;
+        for id in 0..300 {
+            let mut rng = Rng::new(9 ^ 0x9E3779B97F4A7C15u64.wrapping_mul(id as u64 + 1));
+            let inst = gen_instance(id, &mut rng, &cfg);
+            let mut adj = vec![Vec::new(); inst.n_entities];
+            for &(a, b) in &inst.edges {
+                adj[a].push(b);
+            }
+            let ans = inst.answer;
+            let decoy = if inst.candidates[0] == ans { inst.candidates[1] } else { inst.candidates[0] };
+            assert!(reachable(&adj, inst.source, ans));
+            assert!(!reachable(&adj, inst.source, decoy), "decoy must stay unreachable with cross-edges");
         }
     }
 }
