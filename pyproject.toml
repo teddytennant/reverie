@@ -1,0 +1,31 @@
+[project]
+name = "reverie"
+version = "0.1.0"
+description = "Adaptive, curriculum-free reasoning in continuous latent space — a successor to Coconut, in JAX."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "jax>=0.4.34",
+    "equinox>=0.11.7",
+    "optax>=0.2.3",
+    "jaxtyping>=0.2.34",
+    "numpy>=1.26",
+    "chex>=0.1.86",
+    "orbax-checkpoint>=0.6",
+    "tqdm>=4.66",
+    "tyro>=0.8",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0", "pytest-xdist>=3.5"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["reverie"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

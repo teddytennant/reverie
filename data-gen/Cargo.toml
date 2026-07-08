@@ -1,0 +1,18 @@
+[package]
+name = "reverie-datagen"
+version = "0.1.0"
+edition = "2021"
+description = "Fast deterministic generator of ProsQA-style latent-planning reasoning tasks."
+
+[[bin]]
+name = "reverie-datagen"
+path = "src/main.rs"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+
+# No external dependencies: deterministic PRNG and JSON emission are hand-rolled
+# so the build is instant, offline, and reproducible.
+[dependencies]
