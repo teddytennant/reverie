@@ -109,14 +109,27 @@ chance while the halt calibrates, then rises sharply once the trajectory is
 learned (0.50 → 0.58 → 0.81 → **0.88** over steps 200→800) — the answer emerges
 *after* the model has learned where to stop.
 
-### 5.5 The search regime (honest hard case)
+### 5.5 The search regime (distractor branches)
 
 Adding distractor branches (`--branch 1 --trap-depth 1`, `runs/search_reverie.json`)
-removes the component-membership shortcut and turns each hop into a search. At
-0.43M params answer accuracy is capacity-bound here (§6) — the regime is Coconut's
-own showcase and where the from-scratch model needs more scale — but the halting
-mechanism remains well-behaved. We report this rather than restricting evaluation
-to the regime that flatters the method.
+puts a trap edge at every hop, so following the chain requires resolving *which*
+successor is on-path. Reverie learns it (slower — a phase transition around step
+1000) to **0.85 accuracy with the same exact calibration** (ρ = +1.00, steps =
+{2:2, 3:3, 4:4}). Calibration is therefore **task-robust** — it holds identically
+where the answer is easy (§5.1) and where it is hard-won.
+
+| method (search regime) | acc | ρ(steps,hops) | mean steps |
+|---|---|---|---|
+| Reverie | 0.850 | **+1.00** | 3.0 |
+| No-CoT | 0.847 | +0.00 | **0.0** |
+| CoT (generation-scored) | 〈…〉 | – | – |
+
+The decisive observation: **No-CoT matches Reverie's accuracy using zero reasoning
+steps.** The generator's disjoint-component decoy (§6) leaves a shortcut, so this
+task does not *require* reasoning — which makes it a clean demonstration that
+Reverie's calibration is *not* answer-driven: the model spends exactly `n_hops`
+steps even though the steps buy no accuracy here. Calibration tracks *depth*, not
+correctness; no shortcut explains it.
 
 *(On the shortcut-solvable chain task, absolute-accuracy baseline comparisons are
 uninformative — No-CoT exploits component membership, and generation-scored CoT
@@ -125,7 +138,7 @@ pays a decoding penalty — so we do not headline them; see §6.)*
 ## 6. Limitations & honesty
 
 - Small-scale, synthetic, from-scratch: this is a *mechanism* study, not a frontier-scale result. The hidden-space self-distillation variant (`L_distill`+`L_explicit`) and GSM8K transfer are future work.
-- **Two difficulty regimes (an honest finding).** The *depth-supervised halting calibrates near-perfectly to problem depth* (halt loss → 0, ρ ≈ 1.0) across all settings — the novel mechanism is robust. But *answer* accuracy is capacity-bound: at our tiny 0.43M from-scratch scale, multi-hop **chain-following** is learnable, whereas the **search** regime (distractor branches — the hardest ProsQA setting, and Coconut's own showcase) needs more capacity/steps to generalize. Coconut used GPT-2-124M (≈300× larger); absolute accuracy on the search regime is expected to rise with scale. We report both regimes rather than cherry-picking.
+- **The baseline comparison is confounded by a generator shortcut (the honest core caveat).** Calibration (halt loss → 0, ρ ≈ 1.0, steps = `n_hops`) is robust across *every* setting — chain-following (0.88) and the harder distractor **search** regime (0.85), which Reverie learns via a later phase transition. But our generator places the decoy candidate in a graph component *disjoint* from the source, so a component-membership heuristic partly answers the query without multi-hop reasoning: No-CoT reaches ≈0.77–0.89 and generation-scored CoT pays a decode penalty, leaving only a modest Reverie-over-No-CoT margin that mixes reasoning with the shortcut. A clean isolation of *reasoning* accuracy needs a shortcut-free generator (decoy reachable-from-elsewhere but not from the source, same component) and/or GPT-2-scale — both future work. We therefore headline the **mechanism** (calibration), which no shortcut can explain (the halt learns *depth*, not the answer), not the confounded accuracy gap.
 - The theory is a scoped proposition with empirical validation, not a general theorem.
 - Sequential `K+1` latent passes at train time (shared with Coconut); adaptive halting reduces this at inference.
 

@@ -74,7 +74,9 @@ Overall 0.883 acc, mean 3.0 steps, **ρ(steps, hops) = +1.00**, halting loss →
 | − depth-supervision (γ=0) | 0.887 | +0.00 | 5.0 (max) |
 | − trajectory distillation (α=0) | 0.905 | +1.00 | 3.0 |
 
-The two supervision terms are **orthogonal knobs, neither paid for in accuracy** (all three land at 0.88–0.90): γ buys difficulty-calibrated compute (drop it → the halt pins to max depth on every instance, **40% more latent passes**, ρ→0); α buys linearly-decodable latents (interpretability). The learned halt is sharp enough to act as an *exact* per-instance decision. Honest scale caveats (shortcut-solvable easy tasks; capacity-bound search regime) in [`docs/paper.md`](docs/paper.md) §6. Reproduce: `make phase0`.
+The two supervision terms are **orthogonal knobs, neither paid for in accuracy** (all three land at 0.88–0.90): γ buys difficulty-calibrated compute (drop it → the halt pins to max depth on every instance, **40% more latent passes**, ρ→0); α buys linearly-decodable latents (interpretability). The learned halt is sharp enough to act as an *exact* per-instance decision.
+
+**Honest caveat.** The generator places the decoy in a graph component *disjoint* from the source, so a non-reasoning component-membership heuristic partly answers the query — **No-CoT reaches ≈0.85 with zero reasoning steps**, matching Reverie. So the accuracy comparison is *confounded* and we don't headline it. What no shortcut can explain is the **calibration**: the halt learns to spend exactly `n_hops` steps — a fact about problem *depth*, not the answer. A shortcut-free generator (decoy reachable-from-elsewhere, same component) is the clear next step. See [`docs/paper.md`](docs/paper.md) §6. Reproduce: `make phase0`.
 
 ## Status
 
