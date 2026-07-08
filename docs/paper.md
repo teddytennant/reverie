@@ -1,6 +1,6 @@
 # Reverie: Difficulty-Calibrated Latent Reasoning via Depth-Supervised Halting
 
-*Working paper draft. Remaining `〈…〉` are filled from `runs/*.json` via `scripts/ablation_table.py`.*
+*Working paper draft. Reproduce every number with `make phase0` (`scripts/phase0.sh` + `scripts/ablation_table.py`).*
 
 ## Abstract
 
@@ -47,7 +47,7 @@ Defensible claim (§3.3 of `DESIGN.md`): a single curriculum-free, RL-free model
 ## 4. Experimental setup
 
 - **Task:** self-generated ProsQA-style DAG planning (Rust generator, BFS-verified labels, fictional tokens → no pretraining leakage). Difficulty dial = hop count `k`.
-- **Model:** from-scratch decoder-only transformer (RoPE/RMSNorm/SwiGLU), 〈P〉M params, JAX/Equinox.
+- **Model:** from-scratch decoder-only transformer (RoPE/RMSNorm/SwiGLU), 0.43M params (d=128, 2 layers, 4 heads, K=5 latent slots), JAX/Equinox.
 - **Baselines (matched compute):** No-CoT, CoT, Coconut (fixed-depth, answer-only ≈ w/o-curriculum), Coconut+distill (fixed-depth, trajectory-distilled), Reverie (ours).
 - **Metrics:** ProsQA is a binary "Is E a C₁ or C₂?" question, so accuracy is **candidate-restricted** — of the two named candidates, which does the model's answer read-out prefer (chance = 0.5). Latent methods read out at the halted depth; CoT reads out at the answer position *after generating its own reasoning chain*. Also: mean latent steps used, ρ(steps, hops) calibration, single-model halt-bias Pareto, seed stability.
 
@@ -120,12 +120,13 @@ where the answer is easy (§5.1) and where it is hard-won.
 
 | method (search regime) | acc | ρ(steps,hops) | mean steps |
 |---|---|---|---|
-| Reverie | 0.850 | **+1.00** | 3.0 |
+| Reverie | 0.850 | **+1.00** | 3.0 latent |
 | No-CoT | 0.847 | +0.00 | **0.0** |
-| CoT (generation-scored) | 〈…〉 | – | – |
+| CoT (generation-scored) | 0.647 | – | 28 decoded |
 
 The decisive observation: **No-CoT matches Reverie's accuracy using zero reasoning
-steps.** The generator's disjoint-component decoy (§6) leaves a shortcut, so this
+steps**, while generation-scored CoT trails (compounding decode errors over its
+28-token chain). The generator's disjoint-component decoy (§6) leaves a shortcut, so this
 task does not *require* reasoning — which makes it a clean demonstration that
 Reverie's calibration is *not* answer-driven: the model spends exactly `n_hops`
 steps even though the steps buy no accuracy here. Calibration tracks *depth*, not
