@@ -65,42 +65,56 @@ def _to_jax(batch) -> dict:
 
 # ---- inference ---------------------------------------------------------------
 @eqx.filter_jit
-def _predict_latent(model, prompt_ids, prompt_mask, K, adaptive, eps):
-    """Per-batch latent inference. Returns (pred_token [B], steps_used [B])."""
+def _predict_latent(model, prompt_ids, prompt_mask, cands, K, adaptive, eps, halt_bias):
+    """Per-batch latent inference. Returns (pred_token [B], steps_used [B]).
 
-    def one(pid, pmask):
+    Prediction is the *candidate* (of the two in ``cands`` [B,2]) with the higher
+    read-out logit — the fair metric for ProsQA's binary "A or B?" question
+    (chance = 0.5). ``halt_bias`` is added to the halt logit before the sigmoid:
+    >0 halts earlier (fewer steps); sweeping it traces the accuracy-vs-compute
+    Pareto frontier from one trained model.
+    """
+
+    def one(pid, pmask, cand):
         embeds = model.embed(pid)
         Y = latent_unroll(model, embeds, pmask, K)          # [K+1, d]
         logits = model.project(Y)                            # [K+1, V]
-        lam = jax.nn.sigmoid(jax.vmap(model.halt_head)(Y)[:, 0])
+        lam = jax.nn.sigmoid(jax.vmap(model.halt_head)(Y)[:, 0] + halt_bias)
         p = halting_distribution(lam)
         if adaptive:
             cum = jnp.cumsum(p)
             nstar = jnp.argmax(cum >= (1.0 - eps))           # first depth crossing budget
         else:
             nstar = jnp.array(K)
-        pred = jnp.argmax(logits[nstar])
+        row = logits[nstar]
+        pred = cand[jnp.argmax(row[cand])]                   # preferred candidate
         return pred, nstar
 
-    return jax.vmap(one)(prompt_ids, prompt_mask)
+    return jax.vmap(one)(prompt_ids, prompt_mask, cands)
 
 
 @eqx.filter_jit
-def _predict_nocot(model, prompt_ids, prompt_mask):
-    def one(pid, pmask):
+def _predict_nocot(model, prompt_ids, prompt_mask, cands):
+    def one(pid, pmask, cand):
         embeds = model.embed(pid)
-        Y = latent_unroll(model, embeds, pmask, 0)
-        return jnp.argmax(model.project(Y)[0])
+        row = model.project(latent_unroll(model, embeds, pmask, 0))[0]
+        return cand[jnp.argmax(row[cand])]
 
-    return jax.vmap(one)(prompt_ids, prompt_mask)
+    return jax.vmap(one)(prompt_ids, prompt_mask, cands)
 
 
 @eqx.filter_jit
-def _cot_generate(model, prompt_ids, prompt_mask, gen_len):
-    """Greedy-decode gen_len tokens after the (left-padded) prompt, right-extending."""
+def _cot_generate(model, prompt_ids, prompt_mask, cands, gen_len):
+    """Greedy-decode the reasoning after the (left-padded) prompt.
+
+    Returns (gen [B, gen_len], cand_pred [B, gen_len]) where gen[t] is the greedy
+    token generated at position Sp+t and cand_pred[t] is the *candidate-restricted*
+    argmax of that same position's logits — so the answer can be scored on the
+    same two-way choice as the latent methods (conditioned on CoT's own chain).
+    """
     B, Sp = prompt_ids.shape
 
-    def one(pid, pmask):
+    def one(pid, pmask, cand):
         ids = jnp.concatenate([pid, jnp.zeros((gen_len,), jnp.int32)])
         valid = jnp.concatenate([pmask, jnp.zeros((gen_len,))])
         L = Sp + gen_len
@@ -112,15 +126,17 @@ def _cot_generate(model, prompt_ids, prompt_mask, gen_len):
             allowed = causal & (valid[None, :] > 0)
             mask = jnp.where(allowed, 0.0, -1e30)
             H = model.transformer.backbone(model.embed(ids), positions, mask)
-            nxt = jnp.argmax(model.project(H)[Sp + t - 1])   # token after last valid pos
+            row = model.project(H)[Sp + t - 1]               # logits for position Sp+t
+            nxt = jnp.argmax(row)                             # greedy token (continues gen)
+            candp = cand[jnp.argmax(row[cand])]              # candidate-restricted pred
             ids = ids.at[Sp + t].set(nxt)
             valid = valid.at[Sp + t].set(1.0)
-            return (ids, valid), nxt
+            return (ids, valid), (nxt, candp)
 
-        (ids, _), gen = jax.lax.scan(step, (ids, valid), jnp.arange(gen_len))
-        return gen
+        (ids, _), (gen, candp) = jax.lax.scan(step, (ids, valid), jnp.arange(gen_len))
+        return gen, candp
 
-    return jax.vmap(one)(prompt_ids, prompt_mask)
+    return jax.vmap(one)(prompt_ids, prompt_mask, cands)
 
 
 def _spearman(a: np.ndarray, b: np.ndarray) -> float:
@@ -133,7 +149,8 @@ def _spearman(a: np.ndarray, b: np.ndarray) -> float:
 
 def evaluate(model, insts, vocab: Vocab, cfg: ReverieConfig,
              eps: float = 0.1, batch_size: int = 128,
-             prompt_len: int | None = None, cot_len: int | None = None) -> dict:
+             prompt_len: int | None = None, cot_len: int | None = None,
+             halt_bias: float = 0.0) -> dict:
     K = cfg.max_steps
     # fixed gen length for the whole eval call (compile CoT generation once)
     cot_gen_len = int(max(h["n_hops"] for h in insts)) * 6 + 4
@@ -143,19 +160,23 @@ def evaluate(model, insts, vocab: Vocab, cfg: ReverieConfig,
         b = collate(chunk, vocab, max_steps=K, prompt_len=prompt_len, cot_len=cot_len)
         pid = jnp.asarray(b.prompt_ids)
         pmask = jnp.asarray(b.prompt_mask)
+        cands = jnp.asarray([[vocab.concept_id(c) for c in it["candidates"]]
+                             for it in chunk], dtype=jnp.int32)
         if cfg.method == "nocot":
-            pr = np.asarray(_predict_nocot(model, pid, pmask))
+            pr = np.asarray(_predict_nocot(model, pid, pmask, cands))
             st = np.zeros(len(chunk), np.int32)
         elif cfg.method == "cot":
             gen_len = cot_gen_len
-            gen = np.asarray(_cot_generate(model, pid, pmask, gen_len))  # [b, gen_len]
+            gen, candp = _cot_generate(model, pid, pmask, cands, gen_len)
+            gen, candp = np.asarray(gen), np.asarray(candp)
             pr = np.zeros(len(chunk), np.int32)
             for i, row in enumerate(gen):
-                where = np.where(row == ANS)[0]
-                pr[i] = row[where[0] + 1] if len(where) and where[0] + 1 < len(row) else -1
+                w = np.where(row == ANS)[0]
+                # answer = candidate preferred at the position right after CoT's <ans>
+                pr[i] = candp[i, w[0] + 1] if len(w) and w[0] + 1 < gen_len else -1
             st = np.full(len(chunk), gen_len, np.int32)
         else:
-            pr, st = _predict_latent(model, pid, pmask, K, cfg.adaptive, eps)
+            pr, st = _predict_latent(model, pid, pmask, cands, K, cfg.adaptive, eps, halt_bias)
             pr, st = np.asarray(pr), np.asarray(st)
         preds.extend(pr.tolist())
         steps.extend(st.tolist())
@@ -164,13 +185,15 @@ def evaluate(model, insts, vocab: Vocab, cfg: ReverieConfig,
 
     preds, answers, steps, hops = map(np.asarray, (preds, answers, steps, hops))
     correct = (preds == answers)
-    acc_by_hop = {int(k): float(correct[hops == k].mean())
-                  for k in sorted(set(hops.tolist())) if (hops == k).any()}
+    uniq = sorted(set(hops.tolist()))
+    acc_by_hop = {int(k): float(correct[hops == k].mean()) for k in uniq if (hops == k).any()}
+    steps_by_hop = {int(k): float(steps[hops == k].mean()) for k in uniq if (hops == k).any()}
     return dict(
         acc=float(correct.mean()),
         mean_steps=float(steps.mean()),
         rho_steps_hops=_spearman(steps, hops),
         acc_by_hop=acc_by_hop,
+        steps_by_hop=steps_by_hop,
         n=len(preds),
     )
 
@@ -202,6 +225,13 @@ def train(model, train_insts, val_insts, vocab, cfg: ReverieConfig,
         batch = _to_jax(collate([train_insts[j] for j in idx], vocab, cfg.max_steps,
                                 prompt_len=prompt_len, cot_len=cot_len))
         model, opt_state, loss, aux = train_step(model, opt_state, batch)
+        if step % max(1, eval_every // 5) == 0 and step % eval_every != 0:
+            extra = ""
+            if "l_task" in aux:
+                extra = (f"  task {float(aux['l_task']):.2f} traj {float(aux['l_traj']):.2f}"
+                         f" halt {float(aux['l_halt']):.2f}  Edepth {float(aux['expected_depth']):.2f}"
+                         f"  trainacc {float(aux['correct']):.2f}")
+            log(f"[{cfg.method}] step {step:5d}  train_loss {float(loss):7.3f}{extra}")
         if step % eval_every == 0 or step == steps:
             m = evaluate(model, val_insts, vocab, cfg,
                          prompt_len=prompt_len, cot_len=cot_len)

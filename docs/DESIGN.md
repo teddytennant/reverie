@@ -199,7 +199,7 @@ Three pillars, each independently reviewer-legible: the **fused objective** (§2
 ### 4.1 Lead, control, debug, capstone
 
 - **Lead — self-generated ProsQA** (`data-gen/`, fictional tokens, from-scratch model). No external corpus, no pretrained weights, no leakage; difficulty is a dial, so the "advantage grows with required search depth" curve is producible on a laptop-to-single-GPU budget. This is where latent planning is least confounded.
-- **Control — ProntoQA 5-hop (linear chains).** Expected: the Reverie−CoT gap *collapses* to ≈0 (nothing to search). This is a feature of the argument (rules out "latent just helps everywhere"), not a failure.
+- **Control — linear chains.** Expected: the Reverie−CoT gap *collapses* to ≈0 (nothing to search). This is a feature of the argument (rules out "latent just helps everywhere"), not a failure. *No new generator code needed:* running `data-gen` with `--branch 0 --trap-depth 0` removes all distractor branches, leaving a pure source→…→answer chain plus a disjoint decoy — the linear-reasoning control. (A named ProntoQA `--task` mode is an optional cosmetic addition.)
 - **Debug harness — micro-ProsQA** (k-hop letter-graph pointer-chase, ≤8 nodes, ~20-token vocab). CPU, minutes. CI gate before any GPU spend.
 - **Capstone (optional, GPU-only) — GSM8K**, pretrained GPT-2-124M, iCoT-augmented (~385k), `c=2`. Explicitly optional; produces the weakest planning story and needs pretraining, so it is a "does it transfer to real math" stretch, not a gate.
 

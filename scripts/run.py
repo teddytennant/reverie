@@ -123,9 +123,10 @@ def main():
     # threshold ε on the ONE trained adaptive model (no retraining).
     pareto = []
     if adaptive and args.method in ("reverie", "coconut_distill"):
-        for eps in [0.02, 0.05, 0.1, 0.2, 0.35, 0.5, 0.7]:
-            mm = evaluate(model, test_insts, vocab, cfg, eps=eps, prompt_len=plen, cot_len=clen)
-            pareto.append(dict(eps=eps, acc=mm["acc"], mean_steps=mm["mean_steps"]))
+        for hb in [4.0, 2.0, 1.0, 0.0, -1.0, -2.0, -4.0]:  # >0 halts earlier
+            mm = evaluate(model, test_insts, vocab, cfg, halt_bias=hb,
+                          prompt_len=plen, cot_len=clen)
+            pareto.append(dict(halt_bias=hb, acc=mm["acc"], mean_steps=mm["mean_steps"]))
 
     dt = time.time() - t0
     result = dict(method=args.method, adaptive=adaptive, test=test_m, pareto=pareto,

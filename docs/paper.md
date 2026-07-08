@@ -30,7 +30,7 @@ L = Σₙ pₙ·CE(answer, W yₙ)  +  α·Σⱼ CE(k_j, W y_j)  +  γ·(−log 
 - **Task:** self-generated ProsQA-style DAG planning (Rust generator, BFS-verified labels, fictional tokens → no pretraining leakage). Difficulty dial = hop count `k`.
 - **Model:** from-scratch decoder-only transformer (RoPE/RMSNorm/SwiGLU), 〈P〉M params, JAX/Equinox.
 - **Baselines (matched compute):** No-CoT, CoT, Coconut (fixed-depth, answer-only ≈ w/o-curriculum), Coconut+distill (fixed-depth, trajectory-distilled), Reverie (ours).
-- **Metrics:** exact-match accuracy (overall + per hop), mean latent steps used, ρ(steps, hops) calibration, ε-Pareto, seed stability.
+- **Metrics:** ProsQA is a binary "Is E a C₁ or C₂?" question, so accuracy is **candidate-restricted** — of the two named candidates, which does the model's answer read-out prefer (chance = 0.5). Latent methods read out at the halted depth; CoT reads out at the answer position *after generating its own reasoning chain*. Also: mean latent steps used, ρ(steps, hops) calibration, single-model halt-bias Pareto, seed stability.
 
 ## 5. Results
 
