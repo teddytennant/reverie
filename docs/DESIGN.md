@@ -148,6 +148,8 @@ N* = min{ n : Σ_{j≤n} p_j > 1 − ε }
 
 then emit `<eot>` and greedily decode the answer from `z_{N*}`. **Sweeping ε from one trained model traces the accuracy-vs-latent-compute Pareto frontier** (small ε → deeper → more accurate/costly; large ε → shallower). Equivalent knob: add a scalar bias to the halt logit and sweep it. This is the single-model dialable frontier that point-result papers (CODI, CCoT, Coconut) do not provide.
 
+> **Empirical note (results).** With teacher-depth supervision the learned halt is so confident (λ→≈1 *precisely* at `n_hops`) that ε- and bias-sweeps are **flat** — the operating point is an exact per-instance decision, not a tunable threshold. A smoothly dialable frontier would need a *softer* halt (temperature on λ, or `λ_prior` swept across training runs). This is the honest counterpart to the calibration being near-perfect (steps = `n_hops` exactly, ρ = +1.00); see `paper.md §5.3`.
+
 ### 2.6 Theory: why adaptive serial depth is necessary (proposition + sketch)
 
 Let a distribution present instances with required serial reasoning depth `d ∼ P(d)` (heterogeneous — the realistic case; our generator dials `P(d)` exactly). A latent thought adds one step of *serial* computation (each `z_n` attends to `z_{<n}`), unlike Pfau et al.'s filler tokens, which add only *parallel* width and are provably TC⁰-bounded and useless for inherently serial work.

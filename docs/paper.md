@@ -80,8 +80,8 @@ proportion to instance difficulty — learned single-stage, no RL, no curriculum
 | − trajectory distillation (α=0) | 〈…〉 | 〈…〉 | 〈…〉 |
 
 Removing γ makes the halt **pin to the maximum budget on every instance**
-(mean steps → K=5, ρ → 0) *even though accuracy is essentially unchanged*
-(0.847 vs 0.883) and the answer is still learned. The PonderNet answer loss
+(mean steps → K=5, steps-by-hop {2:5, 3:5, 4:5}, ρ → 0) *even though accuracy is
+essentially unchanged* (0.887 vs 0.883) and the answer is still learned. The PonderNet answer loss
 alone does **not** induce calibration; the teacher-depth-supervised halt is the
 mechanism — and it delivers per-instance adaptive compute (**40 % fewer latent
 forward passes at inference**, 3.0 vs 5.0 steps) at no accuracy cost. Removing α
