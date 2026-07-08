@@ -6,7 +6,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-COMMON="--steps 1200 --hops-mix 2,3,4 --branch 0 --trap-depth 0 \
+COMMON="--steps 1000 --hops-mix 2,3,4 --branch 0 --trap-depth 0 \
   --n-train 12000 --n-val 300 --n-test 400 \
   --d-model 128 --layers 2 --heads 4 --max-steps 5 --batch-size 64 --lr 3e-3"
 
@@ -23,7 +23,7 @@ PYTHONUNBUFFERED=1 .venv/bin/python scripts/run.py --method reverie $COMMON \
 
 # harder "search" regime (distractor branches) — expected to need more scale
 PYTHONUNBUFFERED=1 .venv/bin/python scripts/run.py --method reverie \
-  --steps 1200 --hops-mix 2,3,4 --branch 1 --trap-depth 1 \
+  --steps 1000 --hops-mix 2,3,4 --branch 1 --trap-depth 1 \
   --n-train 12000 --n-val 300 --n-test 400 \
   --d-model 128 --layers 2 --heads 4 --max-steps 5 --batch-size 64 --lr 3e-3 \
   --seed 0 --out runs/search_reverie.json

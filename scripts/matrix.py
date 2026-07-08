@@ -51,6 +51,8 @@ def main():
     ap.add_argument("--seeds", default="0")
     ap.add_argument("--steps", type=int, default=3000)
     ap.add_argument("--hops-mix", default="2,3,4,5")
+    ap.add_argument("--branch", type=int, default=2)
+    ap.add_argument("--trap-depth", type=int, default=2)
     ap.add_argument("--n-train", type=int, default=12000)
     ap.add_argument("--n-val", type=int, default=400)
     ap.add_argument("--n-test", type=int, default=500)
@@ -66,6 +68,7 @@ def main():
     methods = args.methods.split(",")
     seeds = [int(s) for s in args.seeds.split(",")]
     common = ["--steps", str(args.steps), "--hops-mix", args.hops_mix,
+              "--branch", str(args.branch), "--trap-depth", str(args.trap_depth),
               "--n-train", str(args.n_train), "--n-val", str(args.n_val),
               "--n-test", str(args.n_test), "--d-model", str(args.d_model),
               "--layers", str(args.layers), "--heads", str(args.heads),
