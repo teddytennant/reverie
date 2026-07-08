@@ -54,6 +54,17 @@ cargo test --manifest-path data-gen/Cargo.toml   # rust
 
 `scripts/run.py` generates train/val/test with **distinct seeds** (hold-out by fresh seed — genuinely unseen test graphs), trains, and reports exact-match accuracy, mean latent steps used, per-hop accuracy, and the Spearman correlation between steps-used and problem depth.
 
+## Preliminary findings (0.43M from-scratch, CPU)
+
+The novel mechanism is robust across every setting tried: the depth-supervised
+differentiable halt **calibrates near-perfectly to problem depth** — halting loss
+drives to ≈0 and the latent steps used correlate with the ground-truth hop count
+at **Spearman ρ ≈ 1.0** (the model spends serial latent compute exactly where the
+instance needs it). On learnable multi-hop reachability, candidate-restricted
+accuracy generalizes above chance and climbs with training; the harder *search*
+regime (distractor branches, Coconut's own showcase) is capacity-bound at this
+tiny scale — see [`docs/paper.md`](docs/paper.md) §6. Full matrix: `scripts/phase0.sh`.
+
 ## Status
 
 Research artifact under active development. Method and experimental design in [`docs/DESIGN.md`](docs/DESIGN.md).

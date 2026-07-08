@@ -57,6 +57,7 @@ L = Σₙ pₙ·CE(answer, W yₙ)  +  α·Σⱼ CE(k_j, W y_j)  +  γ·(−log 
 ## 6. Limitations & honesty
 
 - Small-scale, synthetic, from-scratch: this is a *mechanism* study, not a frontier-scale result. The hidden-space self-distillation variant (`L_distill`+`L_explicit`) and GSM8K transfer are future work.
+- **Two difficulty regimes (an honest finding).** The *depth-supervised halting calibrates near-perfectly to problem depth* (halt loss → 0, ρ ≈ 1.0) across all settings — the novel mechanism is robust. But *answer* accuracy is capacity-bound: at our tiny 0.43M from-scratch scale, multi-hop **chain-following** is learnable, whereas the **search** regime (distractor branches — the hardest ProsQA setting, and Coconut's own showcase) needs more capacity/steps to generalize. Coconut used GPT-2-124M (≈300× larger); absolute accuracy on the search regime is expected to rise with scale. We report both regimes rather than cherry-picking.
 - The theory is a scoped proposition with empirical validation, not a general theorem.
 - Sequential `K+1` latent passes at train time (shared with Coconut); adaptive halting reduces this at inference.
 

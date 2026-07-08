@@ -209,9 +209,9 @@ Baselines: **No-CoT** (question→answer), **CoT** (explicit reasoning SFT), **C
 
 ### 4.3 Metrics
 
-1. **Final-answer exact-match accuracy** (greedy), overall and **stratified by hop count** `k`.
-2. **Latent-steps-used** — mean `N*` at inference (the realized adaptive depth) and its histogram.
-3. **Accuracy-vs-latent-FLOPs Pareto** — sweep ε; latent-FLOPs ≈ `E[N*] ×` per-step backbone FLOPs; plot Reverie's frontier against Coconut's single fixed point and CoT's (many decoded tokens) point.
+1. **Candidate-restricted accuracy** — ProsQA is a binary "Is E a C₁ or C₂?", so score which of the two named candidates the answer read-out prefers (chance = 0.5); overall and **stratified by hop count** `k`. (Implemented: latent methods read out at the halted depth; CoT reads out after generating its own chain.)
+2. **Latent-steps-used** — mean `N*` at inference (the realized adaptive depth) and its per-hop mean (`steps_by_hop`).
+3. **Accuracy-vs-latent-compute Pareto** — sweep a **halt-logit bias** (the confident per-instance halt makes ε flat); plot Reverie's frontier against Coconut's single fixed point and CoT's.
 4. **Difficulty calibration** — Spearman `ρ(N*, k)` using the generator's ground-truth `n_hops`; plus mean `N*` vs `k` curve. This is the claim that compute is spent where needed; ground-truth difficulty is available *because we generate the data* — an advantage no natural-corpus paper has.
 5. **Training stability across seeds** — 3–5 seeds; report mean±std and count of "collapsed" runs (accuracy < random + margin). Target: reproduce Coconut's instability when latents scale (the SIM-CoT collapse) and show Reverie is stable single-stage.
 6. **Interpretability** — linear-probe decode accuracy of latents → key concept tokens (from `L_probe`), reported with vs without the probe term.
