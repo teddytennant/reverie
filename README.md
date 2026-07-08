@@ -72,8 +72,9 @@ Overall 0.883 acc, mean 3.0 steps, **ρ(steps, hops) = +1.00**, halting loss →
 |---|---|---|---|
 | Reverie (full) | 0.883 | **+1.00** | **3.0** |
 | − depth-supervision (γ=0) | 0.887 | +0.00 | 5.0 (max) |
+| − trajectory distillation (α=0) | 0.905 | +1.00 | 3.0 |
 
-Without γ the halt pins to the maximum budget on *every* instance (ρ→0) at **no accuracy cost** — so depth-supervision buys per-instance adaptive compute (**40% fewer latent passes at inference**) essentially free. The learned halt is sharp enough to act as an *exact* decision. Honest scale caveats (shortcut-solvable easy tasks; capacity-bound search regime) in [`docs/paper.md`](docs/paper.md) §6. Reproduce: `scripts/phase0.sh`, `scripts/ablation_table.py`.
+The two supervision terms are **orthogonal knobs, neither paid for in accuracy** (all three land at 0.88–0.90): γ buys difficulty-calibrated compute (drop it → the halt pins to max depth on every instance, **40% more latent passes**, ρ→0); α buys linearly-decodable latents (interpretability). The learned halt is sharp enough to act as an *exact* per-instance decision. Honest scale caveats (shortcut-solvable easy tasks; capacity-bound search regime) in [`docs/paper.md`](docs/paper.md) §6. Reproduce: `make phase0`.
 
 ## Status
 

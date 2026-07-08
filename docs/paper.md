@@ -75,9 +75,9 @@ proportion to instance difficulty — learned single-stage, no RL, no curriculum
 
 | config | acc | ρ(steps,hops) | mean steps |
 |---|---|---|---|
-| Reverie (full) | 0.883 | **+1.00** | **3.0** |
-| − depth-supervision (γ=0) | 0.887 | **+0.00** | **5.0** (max) |
-| − trajectory distillation (α=0) | 0.867 | **+1.00** | **3.0** |
+| Reverie (full) | 0.883 | **+1.00** | **3.0** ({2:2, 3:3, 4:4}) |
+| − depth-supervision (γ=0) | 0.887 | **+0.00** | **5.0** ({2:5, 3:5, 4:5}) |
+| − trajectory distillation (α=0) | 0.905 | **+1.00** | **3.0** ({2:2, 3:3, 4:4}) |
 
 Removing γ makes the halt **pin to the maximum budget on every instance**
 (mean steps → K=5, steps-by-hop {2:5, 3:5, 4:5}, ρ → 0) *even though accuracy is
@@ -85,10 +85,12 @@ essentially unchanged* (0.887 vs 0.883) and the answer is still learned. The Pon
 alone does **not** induce calibration; the teacher-depth-supervised halt is the
 mechanism — and it delivers per-instance adaptive compute (**40 % fewer latent
 forward passes at inference**, 3.0 vs 5.0 steps) at no accuracy cost. Removing α
-(trajectory distillation) leaves calibration intact (ρ = +1.00, it is γ's job)
-and costs a modest ≈1.6 accuracy points (0.883 → 0.867) — the trajectory term
-sharpens the answer and makes the latents linearly decodable, but the
-depth-supervised halt is what allocates the compute.
+(trajectory distillation) changes neither accuracy nor calibration (0.905, ρ =
++1.00) — on this task the answer loss alone learns the mapping, so α's role is
+**interpretability**, not accuracy: it forces each latent to linearly decode to
+its reasoning step. The three variants all land at 0.88–0.90 accuracy: **the two
+supervision terms are orthogonal knobs — γ buys difficulty-calibrated compute,
+α buys decodable latents — neither is paid for in accuracy.**
 
 ### 5.3 The halt is a sharp, exact decision (not a smooth dial)
 
