@@ -19,6 +19,9 @@ dependencies = [
 [project.optional-dependencies]
 dev = ["pytest>=8.0", "pytest-xdist>=3.5"]
 
+[project.urls]
+Repository = "https://github.com/teddytennant/reverie"
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"

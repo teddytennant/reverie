@@ -12,7 +12,7 @@ Coconut ([Hao et al., 2024](https://arxiv.org/abs/2412.06769)) showed that a tra
 
 - **Trajectory distillation.** Every continuous thought is supervised to decode, through the tied output head, to its gold reasoning step — full-trajectory supervision (vs CODI's single anchor), and latents that are *linearly decodable back to the reasoning* (interpretability for free).
 - **Depth-supervised adaptive halting.** A PonderNet-style differentiable halt sets the number of thoughts per problem, with its target pinned to the **teacher's own per-instance reasoning depth** (`n_hops`) — not RL, not a bolted-on classifier.
-- **One knob, one Pareto frontier.** Sweeping the halting threshold traces an accuracy-vs-latent-compute frontier from a *single* trained model, and because the halt is depth-supervised, the spent budget is **calibrated to problem difficulty**.
+- **Compute calibrated to difficulty.** Because the halt is supervised by the teacher's depth, the trained model spends **exactly `n_hops` latent steps per problem** (empirically ρ(steps,hops) = +1.00) — serial compute allocated where the instance needs it. The learned halt is sharp enough to act as an *exact* per-instance decision.
 
 See [`docs/DESIGN.md`](docs/DESIGN.md) for the full method, novelty audit vs the latent-CoT landscape (Coconut, CCoT, ICoT, CODI, PonderNet, Quiet-STaR), and the variable-serial-depth theory.
 

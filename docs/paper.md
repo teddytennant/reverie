@@ -1,6 +1,6 @@
 # Reverie: Difficulty-Calibrated Latent Reasoning via Depth-Supervised Halting
 
-*Working paper draft. Numbers marked `〈…〉` are filled from `runs/matrix.json`.*
+*Working paper draft. Remaining `〈…〉` are filled from `runs/*.json` via `scripts/ablation_table.py`.*
 
 ## Abstract
 
@@ -9,7 +9,7 @@ Reasoning in a continuous latent space (Coconut) lets a language model keep seve
 ## 1. Introduction
 
 - Latent reasoning and why (superposition / implicit search), Coconut's three costs.
-- Our contribution: the *fused* objective (trajectory distillation + depth-supervised differentiable halt) in one curriculum-free stage; the single-model difficulty-calibrated Pareto deliverable; the variable-serial-depth framing.
+- Our contribution: the *fused* objective (trajectory distillation + depth-supervised differentiable halt) in one curriculum-free stage; latent compute empirically calibrated to problem difficulty (steps = n_hops); the variable-serial-depth framing.
 - Explicitly: no single ingredient is new (Coconut, CCoT, CODI, PonderNet, RL-halt); the fusion + deliverable + theory are.
 
 ## 2. Method
@@ -40,7 +40,7 @@ No single ingredient is new — continuous thoughts (Coconut), trajectory distil
 | PonderNet | no (task loss only) | yes (differentiable halt) | yes | no content supervision, no teacher-depth target |
 | CODI | single anchor token | no (fixed 6) | yes | one anchor ≠ trajectory; fixed length; no halt |
 | Learning-When-to-Stop | no (answer reward) | yes (RL/PPO) | bolted on | RL halt vs differentiable, distillation-native halt |
-| **Reverie (ours)** | **every thought ← teacher step** | **differentiable halt supervised by teacher depth** | **one joint stage** | **fused objective + one-model difficulty-calibrated frontier + serial-depth theory** |
+| **Reverie (ours)** | **every thought ← teacher step** | **differentiable halt supervised by teacher depth** | **one joint stage** | **fused objective + difficulty-calibrated compute (steps = n_hops) + serial-depth theory** |
 
 Defensible claim (§3.3 of `DESIGN.md`): a single curriculum-free, RL-free model that spends latent compute **calibrated to problem difficulty** by a differentiable, teacher-depth-supervised halt, with a proposition that per-instance adaptive depth is *necessary* on heterogeneous-depth distributions.
 
