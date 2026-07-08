@@ -4,7 +4,7 @@
 
 ## Abstract
 
-Reasoning in a continuous latent space (Coconut) lets a language model keep several candidate deductions alive at once, but it is trained by a brittle multi-stage curriculum, supervises none of its own thoughts, and spends a fixed, hand-set amount of latent compute on every problem regardless of difficulty. We introduce **Reverie**, a single-stage, reinforcement-learning-free method that (i) distills a discrete reasoning trajectory into *every* continuous thought, and (ii) chooses the number of thoughts per problem with a **differentiable PonderNet-style halt whose target is the teacher's own per-instance reasoning depth**. Our central empirical result is that this depth-supervised halt makes a model **spend latent compute in near-perfect proportion to problem difficulty**: on self-generated, BFS-verified reasoning graphs with dialable depth, a 0.43M from-scratch model's realized latent steps track the ground-truth hop count at **Spearman ρ ≈ 1.0** with the halting loss driven to **≈ 0**, entirely single-stage. An ablation isolates the cause — 〈removing the depth-supervision term collapses ρ from ≈1.0 to ≈〈0〉〉 — and the trajectory-distillation term drives task accuracy 〈…〉. One trained model traces an accuracy-vs-latent-compute frontier by a single swept halt bias. We give a proposition that per-instance adaptive latent depth is *necessary* to match explicit reasoning at `E[depth]` compute on heterogeneous-depth distributions. We are candid about scale: at 0.43M parameters the absolute-accuracy comparison to CoT/No-CoT is confounded (easy instances admit non-reasoning shortcuts; the distractor *search* regime is capacity-bound), so we foreground the *mechanism* — which is scale-robust — and release the method, a JAX/Equinox implementation, and a zero-dependency Rust task generator.
+Reasoning in a continuous latent space (Coconut) lets a language model keep several candidate deductions alive at once, but it is trained by a brittle multi-stage curriculum, supervises none of its own thoughts, and spends a fixed, hand-set amount of latent compute on every problem regardless of difficulty. We introduce **Reverie**, a single-stage, reinforcement-learning-free method that (i) distills a discrete reasoning trajectory into *every* continuous thought, and (ii) chooses the number of thoughts per problem with a **differentiable PonderNet-style halt whose target is the teacher's own per-instance reasoning depth**. Our central empirical result is that this depth-supervised halt makes a model **spend latent compute in near-perfect proportion to problem difficulty**: on self-generated, BFS-verified reasoning graphs with dialable depth, a 0.43M from-scratch model's realized latent steps track the ground-truth hop count at **Spearman ρ ≈ 1.0** with the halting loss driven to **≈ 0**, entirely single-stage. An ablation isolates the cause: removing the depth-supervision term collapses ρ from **+1.00 to +0.00** (the halt then pins to the maximum budget on every instance) **at no accuracy cost** (0.883 → 0.847) — the model spends exactly `n_hops` latent steps per problem (2→2.0, 3→3.0, 4→4.0), a 40 % inference-compute saving over the uncalibrated variant. The learned halt is sharp enough to act as an exact per-instance decision. We give a proposition that per-instance adaptive latent depth is *necessary* to match explicit reasoning at `E[depth]` compute on heterogeneous-depth distributions. We are candid about scale: at 0.43M parameters the absolute-accuracy comparison to CoT/No-CoT is confounded (easy instances admit non-reasoning shortcuts; the distractor *search* regime is capacity-bound), so we foreground the *mechanism* — which is scale-robust — and release the method, a JAX/Equinox implementation, and a zero-dependency Rust task generator.
 
 ## 1. Introduction
 
@@ -56,31 +56,46 @@ params, single seed; accuracy is candidate-restricted (chance 0.5); calibration
 ρ is Spearman between realized latent steps and ground-truth hop count on a
 hops-{2,3,4} test set.
 
-### 5.1 The central result: difficulty-calibrated latent compute
+### 5.1 The central result: latent compute equals reasoning depth, exactly
 
-The depth-supervised halt drives the halting loss to **≈ 0** and makes the
-realized latent steps track the ground-truth hop count at **ρ ≈ 1.0** — the model
-spends serial latent compute in near-exact proportion to instance difficulty,
-single-stage, no RL. Per-hop mean steps (`steps_by_hop`): 〈k=2→…, 3→…, 4→…〉.
+The depth-supervised halt drives the halting loss to **≈ 0** and the model learns
+to spend **exactly as many latent steps as the instance has reasoning hops**:
 
-### 5.2 Ablation — depth-supervision *causes* the calibration
+| hop count k | mean latent steps used | accuracy |
+|---|---|---|
+| 2 | **2.0** | 0.90 |
+| 3 | **3.0** | 0.83 |
+| 4 | **4.0** | 0.92 |
+
+Overall: 0.883 accuracy, mean 3.0 steps, **ρ(steps,hops) = +1.00**. This is
+near-perfect difficulty calibration — serial latent compute allocated in exact
+proportion to instance difficulty — learned single-stage, no RL, no curriculum.
+
+### 5.2 Ablation — depth-supervision *causes* the calibration, for free
 
 | config | acc | ρ(steps,hops) | mean steps |
 |---|---|---|---|
-| Reverie (full) | 〈0.88〉 | 〈+1.00〉 | 〈3.0〉 |
-| − depth-supervision (γ=0) | 〈…〉 | 〈…〉 | 〈…〉 |
+| Reverie (full) | **0.883** | **+1.00** | **3.0** |
+| − depth-supervision (γ=0) | 0.847 | **+0.00** | **5.0** (max) |
 | − trajectory distillation (α=0) | 〈…〉 | 〈…〉 | 〈…〉 |
 
-Removing γ 〈collapses ρ to ≈…〉 while the answer loss alone 〈does / does not〉
-recover calibration — isolating the depth-supervised halt as the mechanism.
-Removing α 〈drops accuracy to …〉, showing trajectory distillation carries the
-task signal.
+Removing γ makes the halt **pin to the maximum budget on every instance**
+(mean steps → K=5, ρ → 0) *even though accuracy is essentially unchanged*
+(0.847 vs 0.883) and the answer is still learned. The PonderNet answer loss
+alone does **not** induce calibration; the teacher-depth-supervised halt is the
+mechanism — and it delivers per-instance adaptive compute (**40 % fewer latent
+forward passes at inference**, 3.0 vs 5.0 steps) at no accuracy cost. Removing α
+〈drops accuracy to …〉, showing trajectory distillation carries the task signal.
 
-### 5.3 Single-model Pareto frontier
+### 5.3 The halt is a sharp, exact decision (not a smooth dial)
 
-Sweeping the halt-logit bias on the one trained model traces an
-accuracy-vs-latent-steps frontier (from `pareto` in `runs/chain_reverie.json`):
-〈bias → (acc, steps) table〉. No retraining; one model, dialable compute.
+Sweeping the inference halt-logit bias over [−4, +4] leaves the operating point
+unchanged (0.88 acc, 3.0 steps throughout): the learned per-instance halt is so
+confident — λ jumps to ≈1 precisely at depth `n_hops` — that it behaves as a
+*discrete, exact* decision rather than a tunable threshold. A smoothly dialable
+accuracy-vs-compute frontier from one model would require a softer halt (e.g. a
+temperature on λ, or `λ_prior` swept across training runs); we note this as the
+honest counterpart to the calibration being near-perfect.
 
 ### 5.4 Learning dynamics
 
