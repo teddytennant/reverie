@@ -15,6 +15,12 @@ L =  Σₙ pₙ · CE(answer, W yₙ)          # PonderNet answer loss
 
 It works. 2 hops gets 2.0 steps, 3 gets 3.0, 4 gets 4.0, ρ = +1.00. Not "correlated". Exact. Kill γ and the halt pins to max depth at the same accuracy, 0.887 vs 0.883, so the calibration is free and saves 40% of the latent passes.
 
+## What didn't work
+
+No accuracy edge. None. No-CoT gets 0.847 on the search task with zero reasoning steps, Reverie gets 0.850. I figured it was cheating off component membership and added cross-edges to force real directed reachability (`--connect`). No-CoT went *up*: 0.847 → 0.882 → 0.940 as cross-edges went 0 → 12 → 24. A 2-layer transformer resolves reachability on graphs this small in one pass, so nothing here needs to think twice.
+
+Calibration survives it. The halt learns depth, not the answer.
+
 ## Run
 
 ```bash
