@@ -4,74 +4,74 @@
 
 ## Abstract
 
-Reasoning in a continuous latent space (Coconut) lets a language model keep several candidate deductions alive at once, but it is trained by a brittle multi-stage curriculum, supervises none of its own thoughts, and spends a fixed, hand-set amount of latent compute on every problem regardless of difficulty. We introduce **Reverie**, a single-stage, reinforcement-learning-free method that (i) distills a discrete reasoning trajectory into *every* continuous thought, and (ii) chooses the number of thoughts per problem with a **differentiable PonderNet-style halt whose target is the teacher's own per-instance reasoning depth**. Our central empirical result is that this depth-supervised halt makes a model **spend latent compute in near-perfect proportion to problem difficulty**: on self-generated, BFS-verified reasoning graphs with dialable depth, a 0.43M from-scratch model's realized latent steps track the ground-truth hop count at **Spearman ρ ≈ 1.0** with the halting loss driven to **≈ 0**, entirely single-stage. An ablation isolates the cause: removing the depth-supervision term collapses ρ from **+1.00 to +0.00** (the halt then pins to the maximum budget on every instance — 5.0 steps at every hop count) **at no accuracy cost** (0.883 vs 0.887) — with it, the model spends exactly `n_hops` latent steps per problem (2→2.0, 3→3.0, 4→4.0), a 40 % inference-compute saving over the uncalibrated variant. The learned halt is sharp enough to act as an exact per-instance decision. We give a proposition that per-instance adaptive latent depth is *necessary* to match explicit reasoning at `E[depth]` compute on heterogeneous-depth distributions. We are candid about scale: at 0.43M parameters the absolute-accuracy comparison to CoT/No-CoT is confounded (easy instances admit non-reasoning shortcuts; the distractor *search* regime is capacity-bound), so we foreground the *mechanism* — which is scale-robust — and release the method, a JAX/Equinox implementation, and a zero-dependency Rust task generator.
+Coconut reasons in continuous latent space, but trains with a brittle multi-stage curriculum, supervises none of its thoughts, and spends a fixed latent budget on every problem. **Reverie** is a single-stage, RL-free method that (i) distills a discrete reasoning trajectory into every continuous thought, and (ii) chooses thought count with a differentiable PonderNet-style halt targeted at the teacher's per-instance depth.
+
+Central result: the depth-supervised halt makes latent compute track problem difficulty. On self-generated, BFS-verified reasoning graphs, a 0.43M from-scratch model hits **Spearman ρ ≈ 1.0** (steps vs hops) with halting loss ≈ 0, entirely single-stage. Ablating depth-supervision drops ρ from +1.00 to +0.00 (halt pins to max budget: 5.0 steps everywhere) at no accuracy cost (0.883 vs 0.887). With it, the model spends exactly `n_hops` steps (2→2.0, 3→3.0, 4→4.0): a 40% inference-compute saving. The learned halt is sharp enough to act as an exact per-instance decision.
+
+We state a proposition that per-instance adaptive latent depth is necessary to match explicit reasoning at `E[depth]` compute on heterogeneous-depth distributions. At 0.43M params the accuracy comparison to CoT/No-CoT is confounded (easy shortcuts; search regime is capacity-bound), so we foreground the mechanism and release the method, a JAX/Equinox implementation, and a zero-dep Rust generator.
 
 ## 1. Introduction
 
-- Latent reasoning and why (superposition / implicit search), Coconut's three costs.
-- Our contribution: the *fused* objective (trajectory distillation + depth-supervised differentiable halt) in one curriculum-free stage; latent compute empirically calibrated to problem difficulty (steps = n_hops); the variable-serial-depth framing.
-- Explicitly: no single ingredient is new (Coconut, CCoT, CODI, PonderNet, RL-halt); the fusion + deliverable + theory are.
+- Latent reasoning and Coconut's three costs (curriculum, no thought supervision, fixed budget).
+- Contribution: fused objective (trajectory distillation + depth-supervised differentiable halt) in one stage; compute calibrated to difficulty (steps = n_hops); variable-serial-depth framing.
+- No single ingredient is new (Coconut, CCoT, CODI, PonderNet, RL-halt). The fusion, deliverable, and theory are.
 
 ## 2. Method
 
-**Substrate.** A decoder-only transformer `f_θ` (RoPE, RMSNorm, SwiGLU; JAX/Equinox) maps input embeddings to post-final-norm hidden states, with a tied head `W`. Coconut's one idea is reused: a *continuous thought* is a last-layer hidden state fed back, unprojected, as the next input embedding.
+**Substrate.** Decoder-only transformer `f_θ` (RoPE, RMSNorm, SwiGLU; JAX/Equinox). Tied head `W`. Continuous thought = last-layer hidden state fed back, unprojected, as the next input embedding (Coconut's mechanism).
 
-**Latent unroll (static-shape, one compile).** From a left-padded prompt of length `Sp` we append `K` thought slots; thought `t` (column `Sp+t`) consumes the hidden state at column `Sp+t-1`. Causality makes the read-out after `m` thoughts final once thoughts `0..m-1` are filled, so a single length-`K` `lax.scan` yields every intermediate read-out `y_0..y_K`. Because the answer is a single concept token, the answer distribution after `m` thoughts is just `W y_m` — all `K+1` in one batched matmul, no per-depth re-decode.
+**Latent unroll (static-shape, one compile).** From a left-padded prompt of length `Sp`, append `K` thought slots. Thought `t` (column `Sp+t`) consumes the hidden at `Sp+t-1`. One length-`K` `lax.scan` yields every intermediate read-out `y_0..y_K`. Answer after `m` thoughts is `W y_m`; all `K+1` depths in one batched matmul.
 
-**Objective (single stage, no curriculum, no RL, one backward pass).** With halting distribution `pₙ = λₙ∏_{j<n}(1−λ_j)` over depth `n∈{0..K}` (`λ` from a scalar head on `y_n`), teacher depth `m = n_hops`, and gold reasoning node `k_j` at hop `j`:
+**Objective (single stage, no curriculum, no RL).** Halting distribution `pₙ = λₙ∏_{j<n}(1−λ_j)` over `n∈{0..K}`, teacher depth `m = n_hops`, gold node `k_j` at hop `j`:
+
 ```
-L =  Σₙ pₙ·CE(answer, W yₙ)      # PonderNet halting-weighted answer loss
-  +  α·Σⱼ CE(k_j, W y_j)         # trajectory distillation — every thought decodes to its gold step
-  +  γ·(−log p_m)                # the crux: halt supervised by the teacher's per-instance depth
-  +  β·KL(p ‖ Geometric(λ_p))    # anti-collapse prior; λ_p sets the native depth
+L =  Σₙ pₙ·CE(answer, W yₙ)      # PonderNet answer loss
+  +  α·Σⱼ CE(k_j, W y_j)         # trajectory distillation
+  +  γ·(−log p_m)                # halt at teacher depth
+  +  β·KL(p ‖ Geometric(λ_p))    # anti-collapse prior
 ```
-The trajectory term is realized in **output space** (each thought must decode, via the tied head, to its reasoning step) — param-free and doubling as an interpretability probe. Inference rolls thoughts and stops when cumulative halt mass crosses a budget (or a swept logit bias), paying the *actual* depth.
 
-## 3. Related work & novelty
+Trajectory term is in **output space** (each thought decodes via the tied head to its reasoning step): param-free and doubles as an interpretability probe. Inference stops when cumulative halt mass crosses a budget.
 
-No single ingredient is new — continuous thoughts (Coconut), trajectory distillation (CCoT), single-stage self-distillation (CODI), differentiable halting (PonderNet), per-instance latent halting (2511.21581, via RL). **The fusion is:** a single-stage, curriculum-free objective that distills the *full* teacher trajectory into *every* thought **and** sets the chain length with a *differentiable geometric-prior halt whose target is the teacher's own per-instance depth* — no RL, no post-hoc classifier, no staging.
+## 3. Related work and novelty
 
-| Method | Supervised latents? | Adaptive per-instance length? | Single-stage? | Differentiator vs Reverie |
+Ingredients: continuous thoughts (Coconut), trajectory distillation (CCoT), single-stage self-distillation (CODI), differentiable halting (PonderNet), per-instance latent halt (2511.21581, via RL). **The fusion is new:** one stage that distills the full teacher trajectory into every thought **and** sets chain length with a differentiable geometric-prior halt targeted at teacher depth. No RL, no post-hoc classifier, no staging.
+
+| Method | Supervised latents? | Adaptive length? | Single-stage? | vs Reverie |
 |---|---|---|---|---|
-| Coconut | no (answer only) | no (fixed, padded) | no (multi-stage curriculum) | no distillation; brittle staging; fixed depth |
-| CCoT | trajectory (teacher hidden) | learned classifier, fixed ratio | no (multi-stage) | bolted-on halt, not a differentiable prior; no depth supervision |
-| ICoT-KD / SI | teacher hidden (indirect) / none | no | no / curriculum | not an adaptive latent count |
-| Quiet-STaR | reward only, discrete text | no | pretraining | discrete not continuous; high-variance RL |
-| PonderNet | no (task loss only) | yes (differentiable halt) | yes | no content supervision, no teacher-depth target |
-| CODI | single anchor token | no (fixed 6) | yes | one anchor ≠ trajectory; fixed length; no halt |
-| Learning-When-to-Stop | no (answer reward) | yes (RL/PPO) | bolted on | RL halt vs differentiable, distillation-native halt |
-| **Reverie (ours)** | **every thought ← teacher step** | **differentiable halt supervised by teacher depth** | **one joint stage** | **fused objective + difficulty-calibrated compute (steps = n_hops) + serial-depth theory** |
+| Coconut | no (answer only) | no (fixed) | no (curriculum) | no distillation; fixed depth |
+| CCoT | trajectory (teacher hidden) | classifier, fixed ratio | no | bolted-on halt; no depth target |
+| ICoT-KD / SI | teacher hidden / none | no | no / curriculum | not adaptive latent count |
+| Quiet-STaR | reward only, discrete | no | pretraining | discrete; high-variance RL |
+| PonderNet | no | yes (diff. halt) | yes | no content / depth supervision |
+| CODI | single anchor | no (fixed 6) | yes | one anchor ≠ trajectory; no halt |
+| Learning-When-to-Stop | no (answer reward) | yes (RL/PPO) | bolted on | RL vs distillation-native halt |
+| **Reverie** | **every thought ← teacher step** | **diff. halt by teacher depth** | **one stage** | **fused objective + steps = n_hops** |
 
-Defensible claim (§3.3 of `DESIGN.md`): a single curriculum-free, RL-free model that spends latent compute **calibrated to problem difficulty** by a differentiable, teacher-depth-supervised halt, with a proposition that per-instance adaptive depth is *necessary* on heterogeneous-depth distributions.
+Claim: a curriculum-free, RL-free model that spends latent compute calibrated to difficulty via a teacher-depth-supervised halt, with a proposition that adaptive depth is necessary on heterogeneous-depth distributions. (See `DESIGN.md` §3.3.)
 
 ## 4. Experimental setup
 
-- **Task:** self-generated ProsQA-style DAG planning (Rust generator, BFS-verified labels, fictional tokens → no pretraining leakage). Difficulty dial = hop count `k`.
-- **Model:** from-scratch decoder-only transformer (RoPE/RMSNorm/SwiGLU), 0.43M params (d=128, 2 layers, 4 heads, K=5 latent slots), JAX/Equinox.
-- **Baselines (matched compute):** No-CoT, CoT, Coconut (fixed-depth, answer-only ≈ w/o-curriculum), Coconut+distill (fixed-depth, trajectory-distilled), Reverie (ours).
-- **Metrics:** ProsQA is a binary "Is E a C₁ or C₂?" question, so accuracy is **candidate-restricted** — of the two named candidates, which does the model's answer read-out prefer (chance = 0.5). Latent methods read out at the halted depth; CoT reads out at the answer position *after generating its own reasoning chain*. Also: mean latent steps used, ρ(steps, hops) calibration, single-model halt-bias Pareto, seed stability.
+- **Task:** ProsQA-style DAG planning (Rust generator, BFS-verified, fictional tokens). Difficulty dial = hop count `k`.
+- **Model:** from-scratch decoder-only, 0.43M params (d=128, 2 layers, 4 heads, K=5), JAX/Equinox.
+- **Baselines (matched compute):** No-CoT, CoT, Coconut (fixed-depth, answer-only), Coconut+distill, Reverie.
+- **Metrics:** candidate-restricted accuracy (binary C₁/C₂; chance 0.5), mean latent steps, ρ(steps, hops), halt-bias Pareto, seed stability.
 
-All numbers: from-scratch decoder-only transformer, d=128, 2 layers, ~0.43M
-params, single seed; accuracy is candidate-restricted (chance 0.5); calibration
-ρ is Spearman between realized latent steps and ground-truth hop count on a
-hops-{2,3,4} test set.
+All numbers: single seed; test set hops {2,3,4}.
 
-### 5.1 The central result: latent compute equals reasoning depth, exactly
+### 5.1 Central result: latent compute equals reasoning depth
 
-The depth-supervised halt drives the halting loss to **≈ 0** and the model learns
-to spend **exactly as many latent steps as the instance has reasoning hops**:
+Halting loss → ≈ 0; steps match hops exactly:
 
-| hop count k | mean latent steps used | accuracy |
+| hop count k | mean latent steps | accuracy |
 |---|---|---|
 | 2 | **2.0** | 0.90 |
 | 3 | **3.0** | 0.83 |
 | 4 | **4.0** | 0.92 |
 
-Overall: 0.883 accuracy, mean 3.0 steps, **ρ(steps,hops) = +1.00**. This is
-near-perfect difficulty calibration — serial latent compute allocated in exact
-proportion to instance difficulty — learned single-stage, no RL, no curriculum.
+Overall: 0.883 acc, mean 3.0 steps, **ρ = +1.00**. Single-stage, no RL, no curriculum.
 
-### 5.2 Ablation — depth-supervision *causes* the calibration, for free
+### 5.2 Ablation: depth-supervision causes calibration, for free
 
 | config | acc | ρ(steps,hops) | mean steps |
 |---|---|---|---|
@@ -79,75 +79,48 @@ proportion to instance difficulty — learned single-stage, no RL, no curriculum
 | − depth-supervision (γ=0) | 0.887 | **+0.00** | **5.0** ({2:5, 3:5, 4:5}) |
 | − trajectory distillation (α=0) | 0.905 | **+1.00** | **3.0** ({2:2, 3:3, 4:4}) |
 
-Removing γ makes the halt **pin to the maximum budget on every instance**
-(mean steps → K=5, steps-by-hop {2:5, 3:5, 4:5}, ρ → 0) *even though accuracy is
-essentially unchanged* (0.887 vs 0.883) and the answer is still learned. The PonderNet answer loss
-alone does **not** induce calibration; the teacher-depth-supervised halt is the
-mechanism — and it delivers per-instance adaptive compute (**40 % fewer latent
-forward passes at inference**, 3.0 vs 5.0 steps) at no accuracy cost. Removing α
-(trajectory distillation) changes neither accuracy nor calibration (0.905, ρ =
-+1.00) — on this task the answer loss alone learns the mapping, so α's role is
-**interpretability**, not accuracy: it forces each latent to linearly decode to
-its reasoning step. The three variants all land at 0.88–0.90 accuracy: **the two
-supervision terms are orthogonal knobs — γ buys difficulty-calibrated compute,
-α buys decodable latents — neither is paid for in accuracy.**
+Drop γ → halt pins to max budget (K=5 everywhere, ρ→0) while accuracy is unchanged. PonderNet answer loss alone does not induce calibration; γ does, and saves 40% latent passes at inference (3.0 vs 5.0). Drop α → accuracy and calibration hold; α's job is interpretability (force each latent to decode to its step), not accuracy. Orthogonal knobs: γ buys calibrated compute, α buys decodable latents; neither costs accuracy.
 
-### 5.3 The halt is a sharp, exact decision (not a smooth dial)
+### 5.3 Halt is a sharp decision, not a smooth dial
 
-Sweeping the inference halt-logit bias over [−4, +4] leaves the operating point
-unchanged (0.88 acc, 3.0 steps throughout): the learned per-instance halt is so
-confident — λ jumps to ≈1 precisely at depth `n_hops` — that it behaves as a
-*discrete, exact* decision rather than a tunable threshold. A smoothly dialable
-accuracy-vs-compute frontier from one model would require a softer halt (e.g. a
-temperature on λ, or `λ_prior` swept across training runs); we note this as the
-honest counterpart to the calibration being near-perfect.
+Sweeping halt-logit bias over [−4, +4] leaves the operating point fixed (0.88 acc, 3.0 steps). λ jumps to ≈1 exactly at `n_hops`, so the halt is discrete, not a tunable threshold. A smooth accuracy-vs-compute frontier would need a softer halt (temperature on λ, or `λ_prior` swept across runs).
 
 ### 5.4 Learning dynamics
 
-Reverie shows a **phase transition**: candidate-restricted accuracy holds near
-chance while the halt calibrates, then rises sharply once the trajectory is
-learned (0.50 → 0.58 → 0.81 → **0.88** over steps 200→800) — the answer emerges
-*after* the model has learned where to stop.
+Phase transition: accuracy holds near chance while the halt calibrates, then rises once the trajectory is learned (0.50 → 0.58 → 0.81 → **0.88** over steps 200→800). The answer arrives after the model learns where to stop.
 
-### 5.5 The search regime (distractor branches)
+### 5.5 Search regime (distractor branches)
 
-Adding distractor branches (`--branch 1 --trap-depth 1`, `runs/search_reverie.json`)
-puts a trap edge at every hop, so following the chain requires resolving *which*
-successor is on-path. Reverie learns it (slower — a phase transition around step
-1000) to **0.85 accuracy with the same exact calibration** (ρ = +1.00, steps =
-{2:2, 3:3, 4:4}). Calibration is therefore **task-robust** — it holds identically
-where the answer is easy (§5.1) and where it is hard-won.
+With `--branch 1 --trap-depth 1`, every hop has a trap edge. Reverie reaches **0.85 acc with the same exact calibration** (ρ = +1.00, steps = {2:2, 3:3, 4:4}). Calibration holds on easy chains and hard search.
 
-| method (search regime) | acc | ρ(steps,hops) | mean steps |
+| method (search) | acc | ρ(steps,hops) | mean steps |
 |---|---|---|---|
 | Reverie | 0.850 | **+1.00** | 3.0 latent |
 | No-CoT | 0.847 | +0.00 | **0.0** |
 | CoT (generation-scored) | 0.647 | – | 28 decoded |
 
-The decisive observation: **No-CoT matches Reverie's accuracy using zero reasoning
-steps**, while generation-scored CoT trails (compounding decode errors over its
-28-token chain). The generator's disjoint-component decoy (§6) leaves a shortcut, so this
-task does not *require* reasoning — which makes it a clean demonstration that
-Reverie's calibration is *not* answer-driven: the model spends exactly `n_hops`
-steps even though the steps buy no accuracy here. Calibration tracks *depth*, not
-correctness; no shortcut explains it.
+**No-CoT matches Reverie with zero reasoning steps.** Generation-scored CoT trails (decode errors over a 28-token chain). The generator's disjoint-component decoy leaves a shortcut, so this task does not require reasoning. That makes calibration a clean demonstration: the model spends exactly `n_hops` steps even though the steps buy no accuracy. Calibration tracks depth, not correctness.
 
-*(On the shortcut-solvable chain task, absolute-accuracy baseline comparisons are
-uninformative — No-CoT exploits component membership, and generation-scored CoT
-pays a decoding penalty — so we do not headline them; see §6.)*
+## 6. Limitations
 
-## 6. Limitations & honesty
+- Small-scale, synthetic, from-scratch: mechanism study, not frontier scale. Hidden-space self-distillation and GSM8K transfer are future work.
+- **No accuracy advantage at this scale (probed negative).** Calibration is solid across chain (0.88) and search (0.85). Accuracy does not separate: No-CoT 0.847 ≈ Reverie 0.850 on search; CoT trails at 0.647. Component-membership shortcut test (`--connect` cross-edges) left No-CoT unbroken:
 
-- Small-scale, synthetic, from-scratch: this is a *mechanism* study, not a frontier-scale result. The hidden-space self-distillation variant (`L_distill`+`L_explicit`) and GSM8K transfer are future work.
-- **Latent reasoning gives no *accuracy* advantage at this scale — an honest, probed negative.** Calibration (halt loss → 0, ρ ≈ 1.0, steps = `n_hops`) is robust across *every* setting — chain-following (0.88) and the distractor **search** regime (0.85). But across methods, accuracy does *not* separate: on the search task No-CoT reaches 0.847 **with zero reasoning steps**, matching Reverie's 0.850, while generation-scored CoT trails at 0.647 (decode penalty). We suspected a component-membership shortcut (our decoy sits in a graph component disjoint from the source) and tested it directly by adding decoy→source cross-edges (`--connect`) to weakly-connect the graph: at convergence No-CoT is **unmoved** — 0.847 (connect=0) and 0.882 (connect=12) — so connectivity is not the lever. The real reason is more fundamental: **a 2-layer transformer solves directed reachability over these small graphs in a single forward pass**, so multi-step latent reasoning is simply not *needed* for accuracy here. Demonstrating an accuracy advantage requires a regime where single-pass reasoning provably fails — deeper problems than the model can compute in one pass — which at 0.43M from-scratch collides with capacity. This needs GPT-2-scale and a near-miss decoy generator (a distractor branch that tempts greedy search toward the wrong candidate); both future work. We therefore headline the **mechanism** (calibration), which no shortcut and no one-pass solver can explain — the halt learns *depth*, not the answer — not a confounded accuracy gap.
-- The theory is a scoped proposition with empirical validation, not a general theorem.
-- Sequential `K+1` latent passes at train time (shared with Coconut); adaptive halting reduces this at inference.
+| decoy→source cross-edges | 0 | 12 | 24 |
+|---|---|---|---|
+| No-CoT test accuracy | 0.847 | 0.882 | 0.940 |
+
+A 2-layer transformer solves directed reachability over these small graphs in one pass, so multi-step latent reasoning is not needed for accuracy. An accuracy edge needs deeper problems than one pass can compute, plus GPT-2 scale and a near-miss decoy generator. Future work. We headline the mechanism (calibration), which no shortcut explains: the halt learns depth, not the answer.
+- Theory is a scoped proposition with empirical validation, not a general theorem.
+- Train time still pays sequential `K+1` latent passes (shared with Coconut); adaptive halt reduces this at inference.
 
 ## 7. Reproducibility
 
-Seeded Rust generator (byte-reproducible), fixed-shape JAX (single compile), train/val/test held out by *distinct seeds* (no row leakage). The §5 calibration and ablation tables reproduce with:
+Seeded Rust generator (byte-reproducible), fixed-shape JAX (one compile), train/val/test held out by distinct seeds.
+
 ```bash
-bash scripts/phase0.sh          # full Reverie + γ=0 / α=0 ablations + search regime
+bash scripts/phase0.sh          # full Reverie + γ=0 / α=0 ablations + search
 python scripts/ablation_table.py
 ```
-Every run writes a self-describing JSON blob (config, test metrics, per-hop breakdown) under `runs/`.
+
+Each run writes a self-describing JSON blob under `runs/`.
