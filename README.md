@@ -33,4 +33,4 @@ uv venv .venv && uv pip install --python .venv/bin/python -e ".[dev]"
 .venv/bin/python -m pytest -q
 ```
 
-0.43M params, from scratch. Binary choice, so chance is 0.5. Rust generates the graphs, JAX and Equinox do the rest. Method and experimental design in [docs/DESIGN.md](docs/DESIGN.md).
+0.43M params, from scratch. Binary choice, so chance is 0.5. Rust generates the graphs, JAX and Equinox do the rest. Method in [docs/DESIGN.md](docs/DESIGN.md), numbers in [docs/paper.md](docs/paper.md).
