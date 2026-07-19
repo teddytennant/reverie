@@ -24,13 +24,10 @@ Calibration survives it. The halt learns depth, not the answer.
 ## Run
 
 ```bash
-cargo build --release --manifest-path data-gen/Cargo.toml
-uv venv .venv && uv pip install --python .venv/bin/python -e ".[dev]"
-
-.venv/bin/python scripts/run.py --method reverie --steps 3000 --hops 4
-.venv/bin/python scripts/run.py --method coconut --steps 3000 --hops 4   # baseline
-
-.venv/bin/python -m pytest -q
+make install
+make demo      # ~8 min CPU
+make phase0    # the numbers above
+make test
 ```
 
 0.43M params, from scratch. Binary choice, so chance is 0.5. Rust generates the graphs, JAX and Equinox do the rest. Method in [docs/DESIGN.md](docs/DESIGN.md), numbers in [docs/paper.md](docs/paper.md).
