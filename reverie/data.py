@@ -222,14 +222,3 @@ def collate(insts: list[dict], vocab: Vocab, max_steps: int,
         cot_mask=cot_mask,
         cot_loss_mask=cot_loss_mask,
     )
-
-
-def iterate_batches(insts: list[dict], vocab: Vocab, batch_size: int,
-                    max_steps: int, seed: int, shuffle: bool = True):
-    """Deterministic batch iterator: order is a pure function of (seed, epoch)."""
-    idx = np.arange(len(insts))
-    if shuffle:
-        np.random.default_rng(seed).shuffle(idx)
-    for start in range(0, len(insts) - batch_size + 1, batch_size):
-        chunk = [insts[j] for j in idx[start : start + batch_size]]
-        yield collate(chunk, vocab, max_steps)

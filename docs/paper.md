@@ -48,7 +48,7 @@ Ingredients: continuous thoughts (Coconut), trajectory distillation (CCoT), sing
 | Learning-When-to-Stop | no (answer reward) | yes (RL/PPO) | bolted on | RL vs distillation-native halt |
 | **Reverie** | **every thought ← teacher step** | **diff. halt by teacher depth** | **one stage** | **fused objective + steps = n_hops** |
 
-Claim: a curriculum-free, RL-free model that spends latent compute calibrated to difficulty via a teacher-depth-supervised halt, with a proposition that adaptive depth is necessary on heterogeneous-depth distributions. (See `DESIGN.md` §3.3.)
+Claim: a curriculum-free, RL-free model that spends latent compute calibrated to difficulty via a teacher-depth-supervised halt, with a proposition that adaptive depth is necessary on heterogeneous-depth distributions. (See [`docs/DESIGN.md`](DESIGN.md) §3.3.)
 
 ## 4. Experimental setup
 

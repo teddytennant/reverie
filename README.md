@@ -50,9 +50,13 @@ uv venv .venv && uv pip install --python .venv/bin/python -e .
 # 4. tests
 .venv/bin/python -m pytest -q
 cargo test --manifest-path data-gen/Cargo.toml
+
+# optional: short demo, or full Phase-0 table (matches Results below)
+make demo
+make phase0
 ```
 
-`scripts/run.py` generates train/val/test with distinct seeds (hold-out by fresh seed), trains, and reports exact-match accuracy, mean latent steps, per-hop accuracy, and Spearman ρ(steps, depth).
+`scripts/run.py` generates train/val/test with distinct seeds (hold-out by fresh seed), trains, and reports candidate-restricted accuracy (binary C₁/C₂; chance 0.5), mean latent steps, per-hop accuracy, and Spearman ρ(steps, depth). Adaptive runs also sweep `halt_bias` on the halt logit for a single-model Pareto curve.
 
 ## Results (0.43M from-scratch, CPU, candidate-restricted acc)
 

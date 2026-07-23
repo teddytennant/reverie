@@ -8,4 +8,4 @@ COMMON="--steps 1500 --hops-mix 2,3,4 --branch 1 --trap-depth 1 \
   --d-model 160 --layers 4 --heads 4 --max-steps 5 --batch-size 48 --lr 3e-3"
 PYTHONUNBUFFERED=1 .venv/bin/python scripts/matrix.py \
   --methods nocot,cot,coconut,coconut_distill,reverie --seeds 0 $COMMON
-python scripts/report.py runs/matrix.json runs/reverie_s0.json
+.venv/bin/python scripts/report.py runs/matrix.json runs/reverie_s0.json

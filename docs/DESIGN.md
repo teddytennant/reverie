@@ -4,9 +4,9 @@
 
 Status: design + reference for the implementation in `reverie/`. Codename **Reverie**: wordless thought. Everything below is decisive; alternatives appear only as named ablations or risk fallbacks.
 
-> **Implementation status.** Shipped code (`reverie/latent.py`) does trajectory distillation in **output space**: each continuous thought `y_j` is supervised, through the *tied* LM head, to decode to its gold reasoning step's concept token. One param-free term (`L_traj`) that distills the trajectory and makes latents linearly decodable (also the interpretability probe of §2.3-E). The richer **hidden-space** variant of §2.1–2.3 (second teacher-forced pass → per-step hidden targets `t_j` for `L_distill` + `L_explicit`) is a planned enhancement and a strict superset. Core trained objective:
+> **Implementation status (read this first).** What ships today in `reverie/` is **output-space** trajectory distillation + depth-supervised halting, not the full dual-pass design below. Each continuous thought `y_j` is supervised, through the *tied* LM head, to decode to its gold reasoning step's concept token (`L_traj` in `reverie/latent.py`). That one param-free term both distills the trajectory and makes latents linearly decodable (the interpretability probe of §2.3-E). The richer **hidden-space** dual-pass of §2.1–2.3 (second teacher-forced pass → per-step hidden targets `t_j` for `L_distill` + `L_explicit`) is **planned**, not implemented. Treat §2.1 dual-mode and hidden-space losses as the roadmap; the trained objective that actually runs is:
 > `L = Σₙ pₙ·CE(answer, W yₙ) + α·Σⱼ CE(k_j, W y_j) + γ·(−log p_m) + β·KL(p‖Geom(λ_p))`,
-> i.e. `{L_answer, L_traj(=distill/probe fused), L_depth, L_ponder}`. Novelty pillars (§3) hold for this instantiation.
+> i.e. `{L_answer, L_traj(=distill/probe fused), L_depth, L_ponder}`. Novelty pillars (§3) hold for this instantiation. Metrics are **candidate-restricted** binary accuracy (chance 0.5), not full-vocab exact match. Inference Pareto is a `halt_bias` sweep on the halt logit (§2.5), not a β/λ_prior dial at train time.
 
 ---
 
@@ -94,7 +94,7 @@ L_answer = Σ_{n=1}^{N} p_n · ℓ_n
 
 Weight losses, not states (PonderNet, not ACT): latents stay intact, never mean-field-averaged. Cheap via §2.4: one batched teacher-forced decode with `n` on the batch axis.
 
-**(C) Depth supervision (the novel halt target).** Vanilla PonderNet only regularizes toward a global geometric mean `1/λ_p`. We pin the halt, per instance, to teacher chain length `m`:
+**(C) Depth supervision (the novel halt target).** Vanilla PonderNet only regularizes toward a global geometric mean. We pin the halt, per instance, to teacher chain length `m`:
 
 ```
 L_depth = − log p_m           (m = n_hops)
@@ -102,14 +102,14 @@ L_depth = − log p_m           (m = n_hops)
 
 This is the crux: continuous thought count is supervised to track the teacher's per-instance depth, differentiably, with no RL and no separate classifier. One MLE term against a data-given target.
 
-**(D) Halting prior (anti-collapse + global compute knob).** KL to a truncated geometric prior:
+**(D) Halting prior (anti-collapse + training compute prior).** KL to a truncated geometric prior. Shipped code (`geometric_prior` in `reverie/latent.py`) is **0-indexed** over depths `m ∈ {0..K}`:
 
 ```
-p_G(n) ∝ λ_p (1−λ_p)^{n-1}
+p_G(m) ∝ λ_p (1−λ_p)^m ,  m = 0..K,  then renormalize
 L_ponder = KL(p ‖ p_G)
 ```
 
-With `L_depth` doing per-instance supervision, `L_ponder` (i) prevents collapse to a single depth, (ii) sets native depth (`1/λ_p`), (iii) acts as a training-time compute prior. Inference Pareto knob is separate (§2.5).
+Untruncated mean of this 0-indexed geometric is `(1−λ_p)/λ_p` (not the 1-indexed PonderNet mean `1/λ_p`). With `L_depth` doing per-instance supervision, `L_ponder` (i) prevents collapse to a single depth, (ii) gently biases native depth during training, (iii) is **not** the inference Pareto dial. Inference Pareto is a halt-logit bias sweep on one trained model (§2.5).
 
 **Optional (E) Decodability probe (`δ`).** Linear probe `V` recovers each step's key concept from its latent:
 
@@ -125,7 +125,7 @@ Makes latents linearly decodable and yields a first-class interpretability metri
 L = L_answer + α·L_distill + γ·L_depth + β·L_ponder + η·L_explicit + δ·L_probe
 ```
 
-Defaults: `α=1.0, γ=0.5, β=0.01, η=1.0, δ=0.1`, `λ_p ≈ 0.15` (prior mean depth ≈ 6–7), `N = 8`. Core = `{answer, distill, depth, ponder, explicit}`; probe is optional. Ablations map onto terms: *no-distillation* drops `α`; *no-halting* drops `γ+β`, fixes depth; *no-probe* drops `δ`.
+Design defaults (roadmap dual-pass): `α=1.0, γ=0.5, β=0.01, η=1.0, δ=0.1`, `λ_p ≈ 0.15`, `N = 8`. Shipped `ReverieConfig` defaults differ slightly (`γ=1.0`, `λ_p=0.2`, `max_steps=6`) and omit `η`/`δ` (no explicit-mode pass, probe fused into `L_traj`). Core shipped = `{answer, traj, depth, ponder}`. Ablations: *no-distillation* drops `α`; *no-halting* drops `γ+β`, fixes depth.
 
 For math with `c > 1` latents per step (GSM8K): map latents to steps in blocks, supervise the block's last latent to `t_j`, set depth target to `c·m`. Lead task is ProsQA at `c = 1`.
 
@@ -147,9 +147,9 @@ At inference use `lax.while_loop` and pay actual depth: roll latents, stop when 
 N* = min{ n : Σ_{j≤n} p_j > 1 − ε }
 ```
 
-then emit `<eot>` and greedily decode from `z_{N*}`. Sweeping ε (or a halt-logit bias) from one trained model traces the accuracy-vs-latent-compute Pareto frontier.
+then emit `<eot>` and greedily decode from `z_{N*}`. Shipped eval (`scripts/run.py`) sweeps **`halt_bias`** added to the halt logit before the sigmoid (positive → halt earlier). That is the single-model inference Pareto dial; β·KL / `λ_prior` stay fixed from training.
 
-> **Empirical note.** With teacher-depth supervision the halt is so confident (λ→≈1 exactly at `n_hops`) that ε/bias sweeps are **flat**. The operating point is an exact per-instance decision, not a tunable threshold. A smooth frontier needs a softer halt (temperature on λ, or `λ_prior` swept across runs). Honest counterpart to near-perfect calibration (steps = `n_hops`, ρ = +1.00); see `paper.md` §5.3.
+> **Empirical note.** With teacher-depth supervision the halt is so confident (λ→≈1 exactly at `n_hops`) that bias sweeps are **flat**. The operating point is an exact per-instance decision, not a tunable threshold. A smooth frontier needs a softer halt (temperature on λ, or `λ_prior` swept across *retraining* runs). Honest counterpart to near-perfect calibration (steps = `n_hops`, ρ = +1.00); see `docs/paper.md` §5.3.
 
 ### 2.6 Theory: adaptive serial depth is necessary
 
@@ -231,38 +231,40 @@ Baselines (matched compute): **No-CoT**, **CoT**, **Coconut** (faithful reimpl),
 
 ### 4.5 Compute plan
 
-- **Phase 0 (CPU, minutes, gate).** micro-ProsQA; 2 layers, `d_model=128`; 20k train / 1k val; ~3k steps. Pass: Coconut>CoT>No-CoT, EM>95%, latent gap ↑ with `k`, tests green.
+- **Phase 0 (CPU, minutes, gate).** micro-ProsQA; 2 layers, `d_model=128`; ~3k steps. What `make phase0` reproduces today: depth calibration (ρ≈1, steps=`n_hops`) + γ/α ablations under **candidate-restricted** acc. Do not gate on full-vocab EM or Coconut>CoT>No-CoT accuracy order (shortcuts dominate at this scale; see `docs/paper.md` §6).
 - **Phase 1 (single GPU, ~30–90 min, headline).** From-scratch, 6–8 layers, `d_model=256`, ~10–20M params. Data: train 20k / val 500 / test 500 (hold out by fresh seeds). `c=1`, `MAX_STEPS=8`, lr `1e-4`, batch 128, AdamW, warmup-cosine. ~3–5k steps. All four baselines at identical compute; 3–5 seeds.
-- **Phase 2 (sweeps).** ε-Pareto and calibration need no retrain; depth/branching/size sweeps are minutes each.
+- **Phase 2 (sweeps).** Halt-bias Pareto and calibration need no retrain; depth/branching/size sweeps are minutes each.
 - **Phase 3 (optional).** GSM8K if a GPU is free.
 
-Expected headline: Reverie reaches CoT accuracy on ProsQA at fewer and adaptive latent steps; ε-frontier dominates Coconut's fixed point; stable where Coconut collapses; `N*` correlates with `k`; latents linearly decodable; gap widens with depth heterogeneity; collapses to ≈CoT on the linear control.
+Expected headline (aspirational at scale; Phase-0 does **not** claim an accuracy edge): Reverie matches CoT where multi-step reasoning is required, at fewer and adaptive latent steps; halt-bias frontier vs Coconut's fixed point; `N*` correlates with `k`; latents linearly decodable; gap widens with depth heterogeneity when shortcuts are closed.
 
 ---
 
 ## 5. Repo architecture
 
+Shipped layout (flat package; no separate heads/curriculum/optim/eval modules):
+
 ```
-reverie/                                  # repo root
+reverie/
+├── README.md, Makefile, pyproject.toml, LICENSE
 ├── docs/
-│   └── DESIGN.md                         # this file
-├── configs/                              # frozen-dataclass configs
-│   ├── base.py
-│   ├── prosqa_reverie.py / prosqa_coconut.py / prosqa_cot.py / prosqa_nocot.py
-│   └── micro.py
-├── reverie/                              # JAX/Equinox package
-│   ├── model.py                          # Transformer, ModelConfig
-│   ├── latent.py                         # static-shape scan, halt head
-│   ├── heads.py / objective.py / losses.py
-│   ├── curriculum.py                     # Coconut-baseline staging ONLY
-│   ├── optim.py / data.py / tokenizer.py
-│   ├── train.py / eval.py / rng.py
-├── scripts/                              # tyro entrypoints
-│   ├── make_data.py / train.py / eval.py / sweep.py
-├── data-gen/                             # Rust crate
+│   ├── DESIGN.md
+│   └── paper.md
+├── reverie/                     # JAX/Equinox package
+│   ├── __init__.py
+│   ├── model.py                 # Transformer, ModelConfig
+│   ├── latent.py                # static-shape scan, halt head, objective
+│   ├── data.py                  # vocab, render, collate
+│   └── train.py                 # train loop + evaluate
+├── scripts/
+│   ├── run.py                   # single-method train+eval
+│   ├── matrix.py                # multi-method comparison
+│   ├── report.py / ablation_table.py
+│   ├── phase0.sh / phase0_deep.sh
+├── data-gen/                    # Rust crate
 │   ├── Cargo.toml
-│   └── src/main.rs (+ lib.rs, prontoqa.rs, micro.rs)
-└── tests/                                # python + rust
+│   └── src/main.rs
+└── tests/test_core.py
 ```
 
 ### 5.1 Rust generator interface
@@ -278,13 +280,13 @@ Rust owns the abstract, verified problem; Python owns token rendering. JSONL sch
 - `gold_path` → teacher trajectory `s`; `len(gold_path)-1 = n_hops = m` (halt target + calibration ground truth).
 - `edges/entities` → shuffled fact bag; `source/candidates` → query; `answer` → `C⁺`.
 
-CLI: `reverie-datagen --n N --seed S --hops H --branch B --trap-depth D [--task prosqa|prontoqa|micro] [--out FILE]`.
+CLI (shipped): `reverie-datagen --n N --seed S --hops H --branch B --trap-depth D [--connect C] [--out FILE]`. Task variants beyond ProsQA-style DAGs (ProntoQA, micro presets) are planned.
 
 Two refinements: (1) per-example sub-streams `rng_i = SplitMix64(global_seed ^ 0x9E3779B97F4A7C15·i)` so any example is regenerable in isolation; (2) golden-file determinism test for byte-identical corpora across platforms.
 
 ### 5.2 Notes on the existing model
 
-`model.py` returns `(logits, hidden)` and exposes `backbone(x, positions)` over input embeddings: the latent hook. `latent.py` calls `backbone`, not `__call__`. Keep the Python list of blocks (fine at 6–8 layers); switch to scan-over-layers + remat only past ~16 layers. Weight tying on; RoPE/RMSNorm/SwiGLU as implemented. Reproducibility: data order and RNG are pure functions of `(seed, step)`; config is a frozen dataclass hashed into the run dir; Orbax checkpoints save params+opt_state+step+rng.
+`model.py` returns `(logits, hidden)` and exposes `backbone(x, positions)` over input embeddings: the latent hook. `latent.py` calls `backbone`, not `__call__`. Keep the Python list of blocks (fine at 6–8 layers); switch to scan-over-layers + remat only past ~16 layers. Weight tying on; RoPE/RMSNorm/SwiGLU as implemented. Reproducibility: data order and RNG are pure functions of `(seed, step)`; run config is a frozen dataclass written into each `runs/*.json`. Checkpointing is not wired yet (params stay in memory for the run; Orbax or equivalent is planned).
 
 ---
 
@@ -306,14 +308,16 @@ Two refinements: (1) per-example sub-streams `rng_i = SplitMix64(global_seed ^ 0
 
 ### 6.2 Build order (five gated steps)
 
-1. **Data + harness.** Refine `data-gen/` (sub-streams, lib, prontoqa, micro, tests); build `data.py` + `tokenizer.py`. Gate: golden-file + BFS-verify green; rendered ProsQA matches serialization.
-2. **Backbone + non-latent baselines (CPU micro).** Wire train/eval; No-CoT and CoT SFT; overfit micro-ProsQA. Gate: EM>95%; CoT>No-CoT.
-3. **Latent mechanism + Coconut reimpl.** Static-shape scan + halt head; curriculum staging; reproduce Coconut≥CoT and its instability when latents scale. Gate: latent-grad and halt tests green.
-4. **Reverie objective.** Teacher pass + step-aligned distill + PonderNet answer + depth + ponder (+ probe), single stage. Gate: Reverie ≥ Coconut at fewer/adaptive steps; depth histogram tracks `m`; stable across 3 seeds.
-5. **Scaling + Pareto + theory eval.** ε-Pareto, calibration ρ, sweeps, ProntoQA control, seed-stability table. Gate: gap widens with `k`; ε-frontier dominates Coconut; ρ strong-positive; control gap collapses.
+Historical / planned gates. Phase-0 calibration that `make phase0` reproduces today is the output-space + depth-supervised objective on micro ProsQA (see `docs/paper.md`), not every gate below.
+
+1. **Data + harness.** Refine `data-gen/` (sub-streams, lib, prontoqa, micro, tests); build `data.py` + tokenizer. Gate: golden-file + BFS-verify green; rendered ProsQA matches serialization.
+2. **Backbone + non-latent baselines (CPU micro).** Wire train/eval; No-CoT and CoT SFT; overfit micro-ProsQA. Gate: candidate-restricted acc high; CoT>No-CoT where the task requires reasoning.
+3. **Latent mechanism + Coconut reimpl.** Static-shape scan + halt head; reproduce Coconut baseline. Gate: latent-grad and halt tests green.
+4. **Reverie objective.** Output-space traj distill + PonderNet answer + depth + ponder, single stage (hidden-space dual-pass later). Gate: depth histogram tracks `m`; stable across seeds.
+5. **Scaling + Pareto + theory eval.** Halt-bias Pareto, calibration ρ, sweeps, ProntoQA control, seed-stability table. Gate: gap widens with `k` when shortcuts are closed; ρ strong-positive; control gap collapses.
 
 ---
 
 ### Anchor references
 
-Coconut (arXiv:2412.06769) · PonderNet (2107.05407) · CODI (2502.21074) · CCoT (2412.13171) · ICoT-KD (2311.01460) / Stepwise-Internalization (2405.14838) · Quiet-STaR (2403.09629) · Learning-When-to-Stop (2511.21581) · SIM-CoT latent-collapse (2509.20317) · Filler-tokens TC⁰ bound (2404.15758) · ProntoQA (2210.01240) · GSM8K (2110.14168). Stack: Equinox + Optax + Orbax; determinism after Levanter (data/RNG as pure functions of `(seed, step)`).
+Coconut (arXiv:2412.06769) · PonderNet (2107.05407) · CODI (2502.21074) · CCoT (2412.13171) · ICoT-KD (2311.01460) / Stepwise-Internalization (2405.14838) · Quiet-STaR (2403.09629) · Learning-When-to-Stop (2511.21581) · SIM-CoT latent-collapse (2509.20317) · Filler-tokens TC⁰ bound (2404.15758) · ProntoQA (2210.01240) · GSM8K (2110.14168). Stack: Equinox + Optax (Orbax checkpointing planned); determinism after Levanter (data/RNG as pure functions of `(seed, step)`).

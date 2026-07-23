@@ -15,9 +15,9 @@ import os
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 RUNS = [
-    ("Reverie (full)", "runs/chain_reverie.json"),
-    ("− depth-sup (γ=0)", "runs/abl_nogamma.json"),
-    ("− trajectory (α=0)", "runs/abl_noalpha.json"),
+    ("Reverie (full)", "runs/reverie_s0.json"),
+    ("− depth-sup (γ=0)", "runs/ablate_noDepthSup.json"),
+    ("− trajectory (α=0)", "runs/ablate_noTraj.json"),
     ("Reverie (search regime)", "runs/search_reverie.json"),
 ]
 
@@ -43,8 +43,8 @@ def main():
     for name, acc, rho, ms, sbh in rows:
         print(f"| {name} | {acc:.3f} | {rho:+.2f} | {ms:.2f} | {sbh} |")
 
-    full = load("runs/chain_reverie.json")
-    nog = load("runs/abl_nogamma.json")
+    full = load("runs/reverie_s0.json")
+    nog = load("runs/ablate_noDepthSup.json")
     if full and nog:
         print(f"\nCalibration is caused by depth-supervision: ρ = "
               f"{full['test']['rho_steps_hops']:+.2f} (full) vs "

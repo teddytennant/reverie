@@ -28,4 +28,5 @@ PYTHONUNBUFFERED=1 .venv/bin/python scripts/run.py --method reverie \
   --d-model 128 --layers 2 --heads 4 --max-steps 5 --batch-size 64 --lr 3e-3 \
   --seed 0 --out runs/search_reverie.json
 
-python scripts/report.py runs/matrix.json runs/reverie_s0.json
+.venv/bin/python scripts/report.py runs/matrix.json runs/reverie_s0.json
+.venv/bin/python scripts/ablation_table.py

@@ -10,10 +10,6 @@ dependencies = [
     "optax>=0.2.3",
     "jaxtyping>=0.2.34",
     "numpy>=1.26",
-    "chex>=0.1.86",
-    "orbax-checkpoint>=0.6",
-    "tqdm>=4.66",
-    "tyro>=0.8",
 ]
 
 [project.optional-dependencies]

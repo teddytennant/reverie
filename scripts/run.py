@@ -43,13 +43,15 @@ def gen(n, seed, hops, branch, trap_depth, connect=0):
 def gen_split(n, seed, hops_list, branch, trap_depth, connect=0):
     """Generate n instances; if hops_list has >1 value, mix them evenly
     (heterogeneous reasoning depth -> the calibration / depth-variance story)."""
-    per = max(1, n // len(hops_list))
+    base, rem = divmod(n, len(hops_list))
+    counts = [base + (1 if j < rem else 0) for j in range(len(hops_list))]
     insts = []
-    for j, h in enumerate(hops_list):
-        insts += gen(per, seed + 100 * j, h, branch, trap_depth, connect)
+    for j, (h, c) in enumerate(zip(hops_list, counts)):
+        if c:
+            insts += gen(c, seed + 100 * j, h, branch, trap_depth, connect)
     import random
     random.Random(seed).shuffle(insts)
-    return insts[:n] if len(insts) >= n else insts
+    return insts[:n]
 
 
 def main():
@@ -106,8 +108,10 @@ def main():
         adaptive = bool(args.adaptive)
     # coconut = fixed depth, answer only (no traj/halt); coconut_distill adds traj
     alpha = args.alpha if args.method in ("reverie", "coconut_distill") else 0.0
+    gamma = args.gamma if adaptive else 0.0
+    beta = args.beta if adaptive else 0.0
     cfg = ReverieConfig(max_steps=args.max_steps, method=args.method, adaptive=adaptive,
-                        alpha_traj=alpha, gamma_halt=args.gamma, beta_reg=args.beta,
+                        alpha_traj=alpha, gamma_halt=gamma, beta_reg=beta,
                         lambda_prior=args.lambda_prior)
 
     mcfg = ModelConfig(vocab_size=vocab.size, d_model=args.d_model, n_layers=args.layers,

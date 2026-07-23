@@ -39,7 +39,7 @@ class ModelConfig:
 
     @property
     def head_dim(self) -> int:
-        assert self.d_model % self.n_heads == 0, "d_model must divide n_heads"
+        assert self.d_model % self.n_heads == 0, "d_model must be divisible by n_heads"
         return self.d_model // self.n_heads
 
     @property

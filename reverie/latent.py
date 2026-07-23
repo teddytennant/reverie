@@ -18,7 +18,7 @@ curriculum) fuses four terms, each toggleable for ablations:
     L = Σ_m p_m · CE(answer, W y_m)                     # PonderNet expected loss
       + α · Σ_{i=1}^{k} CE(path[i], W y_i)              # trajectory distillation
       + γ · (−log p_k)                                  # halt at teacher depth k
-      + β · KL(p ‖ Geometric(λ_prior))                  # compute prior (Pareto knob)
+      + β · KL(p ‖ Geometric(λ_prior))                  # anti-collapse compute prior (training)
 
 where p_m is the PonderNet halting distribution over depth m∈{0..K}, and
 k = n_hops is the teacher's per-instance reasoning depth. Setting the flags off
@@ -49,11 +49,8 @@ class ReverieConfig:
     adaptive: bool = True         # learned halting distribution vs fixed depth K
     alpha_traj: float = 1.0       # trajectory-distillation weight
     gamma_halt: float = 1.0       # depth-supervision weight (halt at n_hops)
-    beta_reg: float = 0.01        # KL-to-geometric-prior weight (Pareto knob mate)
-    lambda_prior: float = 0.2     # geometric prior halt rate (mean depth 1/λ)
-
-    def with_overrides(self, **kw) -> "ReverieConfig":
-        return dataclasses.replace(self, **kw)
+    beta_reg: float = 0.01        # KL-to-geometric-prior weight (training anti-collapse)
+    lambda_prior: float = 0.2     # geometric prior halt rate; untruncated E[depth]=(1-λ)/λ on {0,1,...}
 
 
 class ReverieModel(eqx.Module):
@@ -122,6 +119,7 @@ def halting_distribution(lam: Float[Array, " k1"]) -> Float[Array, " k1"]:
 
 
 def geometric_prior(n: int, lam_p: float) -> Float[Array, " n"]:
+    """Truncated-and-renormalized Geom(λ) over {0..n-1} (0-indexed depths)."""
     m = jnp.arange(n)
     g = lam_p * (1.0 - lam_p) ** m
     return g / g.sum()
@@ -167,7 +165,7 @@ def reverie_example_loss(model, prompt_embeds, prompt_valid, answer,
     else:
         l_halt = jnp.zeros(())
 
-    # compute prior (also the knob that sweeps the accuracy-vs-compute Pareto front)
+    # anti-collapse compute prior (training); inference Pareto dial is halt_bias
     if cfg.adaptive and cfg.beta_reg > 0.0:
         g = geometric_prior(K + 1, cfg.lambda_prior)
         l_reg = jnp.sum(p * (jnp.log(p + _EPS) - jnp.log(g + _EPS)))
@@ -176,7 +174,12 @@ def reverie_example_loss(model, prompt_embeds, prompt_valid, answer,
 
     loss = l_task + cfg.alpha_traj * l_traj + cfg.gamma_halt * l_halt + cfg.beta_reg * l_reg
     expected_depth = jnp.sum(p * jnp.arange(K + 1))
-    pred = jnp.argmax(logits[K])                               # answer at full depth
+    # adaptive: MAP halt depth readout; non-adaptive: full-depth K (matches l_task)
+    if cfg.adaptive:
+        nstar = jnp.argmax(p)
+        pred = jnp.argmax(logits[nstar])
+    else:
+        pred = jnp.argmax(logits[K])
     aux = dict(l_task=l_task, l_traj=l_traj, l_halt=l_halt, l_reg=l_reg,
                expected_depth=expected_depth, correct=(pred == answer).astype(jnp.float32))
     return loss, aux

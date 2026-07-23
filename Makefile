@@ -18,7 +18,6 @@ test-rust:        ## rust tests (determinism, BFS-verified labels)
 
 phase0:           ## reproduce the Phase-0 calibration + ablation results
 	bash scripts/phase0.sh
-	$(VENV)/python scripts/ablation_table.py
 
 demo:             ## train one Reverie model on multi-hop reachability (~8 min CPU)
 	$(VENV)/python scripts/run.py --method reverie --steps 1000 --hops-mix 2,3,4 \
