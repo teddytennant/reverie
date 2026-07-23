@@ -4,6 +4,22 @@
 
 Design notes and reference for the implementation in `reverie/`. Codename **Reverie**: wordless thought.
 
+## 0. What ships and what doesn't
+
+What runs today is output-space trajectory distillation plus depth-supervised halting. Each continuous thought `y_j` is supervised, through the *tied* LM head, to decode to its gold reasoning step's concept token (`L_traj` in `reverie/latent.py`). That one parameter-free term does double duty: it distills the trajectory, and it makes the latents linearly decodable, so it is also the interpretability probe I'd otherwise need a separate `V` for.
+
+```
+L = Σₙ pₙ·CE(answer, W yₙ) + α·Σⱼ CE(k_j, W y_j) + γ·(−log p_m) + β·KL(p‖Geom(λ_prior))
+```
+
+`{L_answer, L_traj, L_depth, L_ponder}`, four terms, one backward pass.
+
+The hidden-space dual-pass described in §2.1 and §2.3 is the roadmap, not the code. There is no second teacher-forced forward, no per-step hidden target `t_j`, no `L_distill` and no `L_explicit` in `latent.py`. Read §2.1 and losses (A) and (E) as the planned version; §2.2, §2.4, §2.5 and the objective above are what runs.
+
+Two things about the numbers, while I'm being careful. Metrics are candidate-restricted binary accuracy (chance 0.5), not full-vocab exact match. And the inference Pareto is a `halt_bias` sweep on the halt logit of one trained model, not a β or `λ_prior` dial at train time.
+
+---
+
 ## 1. Thesis
 
 Coconut reasons in continuous latent space by feeding the last-layer hidden state back as the next input embedding. It works, and pays three costs:
@@ -31,7 +47,7 @@ Per training instance the generator (`data-gen/`) hands over, verified:
 
 `m` and `k_j` are the two supervision signals prior latent methods don't have. Reverie uses both.
 
-### 2.1 Two modes of one model (single stage, curriculum-free)
+### 2.1 Two modes of one model (planned)
 
 Same weights `θ`, two input regimes in one training step.
 
@@ -69,13 +85,13 @@ def step(carry, n):                                 # n = 0..N-1  (static length
 
 Let `D(a,b)` be cosine distance on layer-normalized vectors, `D(a,b) = ‖ā − b̄‖²` with `ā = a/‖a‖`. Magnitude rides the residual stream, so I don't want it in the metric; CCoT uses scaled-MSE and CODI uses normalized L1, cosine is the default here.
 
-(A) Trajectory distillation, content, per step:
+(A) Trajectory distillation, content, per step. Hidden-space version, planned:
 
 ```
 L_distill = (1/m) Σ_{j=1}^{m} D( z_j , sg(t_j) )
 ```
 
-Latent `z_j` aligns to teacher step `j` for the first `m` latents; later latents have no distill target, since the halt is pushed to stop at `m`. Every latent is supervised. CODI aligns one anchor, Coconut aligns nothing.
+Latent `z_j` aligns to teacher step `j` for the first `m` latents; later latents have no distill target, since the halt is pushed to stop at `m`. Every latent is supervised. CODI aligns one anchor, Coconut aligns nothing. The shipped `L_traj` does the same job in output space: `α·Σⱼ CE(k_j, W y_j)`, no extra parameters and no teacher pass.
 
 (B) Adaptive-halt answer read-out, PonderNet over depth. Score the answer at each candidate depth and weight by the halt distribution:
 
@@ -94,7 +110,7 @@ L_depth = − log p_m           (m = n_hops)
 
 One MLE term against a target the data already contains. That is what produces calibrated compute: thought count tracks per-instance depth, differentiably, with no RL and no separate classifier.
 
-(D) Halting prior: anti-collapse, plus a compute prior during training. KL to a truncated geometric. The prior is 0-indexed over depths `m ∈ {0..K}`:
+(D) Halting prior: anti-collapse, plus a compute prior during training. KL to a truncated geometric. The shipped `geometric_prior` in `reverie/latent.py` is 0-indexed over depths `m ∈ {0..K}`:
 
 ```
 p_G(m) ∝ λ_p (1−λ_p)^m ,  m = 0..K,  then renormalize
@@ -103,13 +119,13 @@ L_ponder = KL(p ‖ p_G)
 
 Watch the indexing. The untruncated mean of this 0-indexed geometric is `(1−λ_p)/λ_p`, not PonderNet's 1-indexed `1/λ_p`. With `L_depth` doing per-instance supervision, `L_ponder` prevents collapse to a single depth and gently biases native depth during training. It is not the inference Pareto dial; see §2.5.
 
-(E) Decodability probe `δ`, optional. A linear probe `V` recovers each step's key concept from its latent:
+(E) Decodability probe `δ`, planned and, as things shipped, unnecessary. A linear probe `V` recovers each step's key concept from its latent:
 
 ```
 L_probe = (1/m) Σ_{j=1}^{m} − log softmax(V z_j)[k_j]
 ```
 
-This makes the latents linearly decodable and gives a first-class interpretability metric.
+Since the shipped `L_traj` already pushes each latent through the tied head to its step's concept token, decodability is measured directly and `V` never gets built.
 
 Total objective, one backward pass:
 
@@ -117,7 +133,7 @@ Total objective, one backward pass:
 L = L_answer + α·L_distill + γ·L_depth + β·L_ponder + η·L_explicit + δ·L_probe
 ```
 
-Design defaults: `α=1.0, γ=0.5, β=0.01, η=1.0, δ=0.1`, `λ_p ≈ 0.15`, `N = 8`. Ablations: *no-distillation* drops `α`, *no-halting* drops `γ+β` and fixes depth.
+Design defaults for the dual-pass roadmap: `α=1.0, γ=0.5, β=0.01, η=1.0, δ=0.1`, `λ_p ≈ 0.15`, `N = 8`. The shipped `ReverieConfig` differs: `γ=1.0`, `λ_p=0.2`, `max_steps=6`, and no `η` or `δ` at all. Ablations: *no-distillation* drops `α`, *no-halting* drops `γ+β` and fixes depth.
 
 For math with `c > 1` latents per step (GSM8K), map latents to steps in blocks, supervise the block's last latent to `t_j`, and set the depth target to `c·m`. The lead task is ProsQA at `c = 1`.
 
@@ -141,7 +157,7 @@ Stop when cumulative halt mass crosses the budget:
 N* = min{ n : Σ_{j≤n} p_j > 1 − ε }
 ```
 
-then emit `<eot>` and greedily decode from `z_{N*}`. At inference this should use a `lax.while_loop` and pay actual depth rather than every slot.
+then emit `<eot>` and greedily decode from `z_{N*}`. Shipped eval (`reverie/train.py`, driven by `scripts/run.py`) computes this as a `cumsum` and `argmax` over the static `K+1` read-outs, which is correct but still pays every slot; a `lax.while_loop` that pays actual depth is the version that turns calibration into wall-clock savings.
 
 The Pareto dial is `halt_bias`, added to the halt logit before the sigmoid, positive halts earlier. `scripts/run.py` sweeps it over `[4, 2, 1, 0, −1, −2, −4]` on the one trained model. β·KL and `λ_prior` stay fixed from training.
 
@@ -261,7 +277,7 @@ Rust owns the abstract, BFS-verified problem; Python owns token rendering. JSONL
 
 `gold_path` becomes the teacher trajectory `s`, and `len(gold_path)-1 = n_hops = m` is both the halt target and the calibration ground truth. `edges` and `entities` render into the shuffled fact bag, `source` and `candidates` into the query, and `answer` marks `C⁺`.
 
-CLI: `reverie-datagen --n N --seed S --hops H --branch B --trap-depth D [--out FILE]`. Task variants beyond ProsQA-style DAGs (ProntoQA, micro presets) are planned.
+Shipped CLI: `reverie-datagen --n N --seed S --hops H --branch B --trap-depth D [--connect C] [--out FILE]`. Task variants beyond ProsQA-style DAGs (ProntoQA, micro presets) are planned.
 
 Two refinements I want next: per-example sub-streams, `rng_i = SplitMix64(global_seed ^ 0x9E3779B97F4A7C15·i)`, so any single example is regenerable in isolation; and a golden-file determinism test so corpora are byte-identical across platforms.
 
