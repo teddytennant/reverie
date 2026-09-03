@@ -177,7 +177,15 @@ class Transformer(eqx.Module):
     def __init__(self, cfg: ModelConfig, *, key: PRNGKeyArray):
         ke, kh, *kb = jax.random.split(key, cfg.n_layers + 2)
         self.cfg = cfg
-        self.tok_embed = eqx.nn.Embedding(cfg.vocab_size, cfg.d_model, key=ke)
+        # Equinox initializes an Embedding to N(0, 1). Tied to the LM head that
+        # puts the initial logits at a scale of d_model, so step 0 costs ~130
+        # nats per token on a 24-token vocab instead of log(24) = 3.2, and the
+        # first few hundred updates go into shrinking the embedding back down.
+        # Scale it to 1/sqrt(d) at init and the run starts near chance instead.
+        self.tok_embed = eqx.nn.Embedding(
+            weight=jax.random.normal(ke, (cfg.vocab_size, cfg.d_model))
+            * (cfg.d_model**-0.5)
+        )
         self.blocks = [Block(cfg, key=kb[i]) for i in range(cfg.n_layers)]
         self.final_norm = RMSNorm(cfg.d_model)
         self.lm_head = (

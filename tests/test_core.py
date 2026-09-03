@@ -8,6 +8,7 @@ import equinox as eqx
 import jax
 import jax.numpy as jnp
 import numpy as np
+import optax
 import pytest
 
 from reverie.data import build_vocab, collate, concept_name, render
@@ -97,6 +98,16 @@ def test_transformer_forward_and_feedback():
     x2 = jnp.concatenate([x, hidden[-1:]], 0)
     l2, h2 = m(x2)
     assert l2.shape == (8, 50)
+
+
+def test_init_logits_start_near_chance():
+    """Tied embeddings at Equinox's N(0, 1) default make step-0 CE ~130 nats."""
+    cfg = ModelConfig(vocab_size=24, d_model=128, n_layers=2, n_heads=4)
+    m = Transformer(cfg, key=jax.random.PRNGKey(0))
+    logits, _ = m(m.embed(jnp.arange(16)))
+    ce = optax.softmax_cross_entropy_with_integer_labels(
+        logits, jnp.zeros((16,), jnp.int32))
+    assert float(jnp.mean(ce)) < 3 * np.log(24)
 
 
 # ---- halting ----
