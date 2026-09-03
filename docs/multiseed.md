@@ -1,12 +1,19 @@
 # Multi-seed results
 
-Still running. These are the numbers as of 2026-09-02, on commit cd00232 (the
+Still running. These are the numbers as of 2026-09-03, on commit cd00232 (the
 embedding init fix). Cell counts are given per line because some grids are still
-filling; anything here can move.
+filling; anything here can move, and some of it already has, twice.
 
 All runs use the `scripts/phase0.sh` configuration unless stated: 1000 steps,
 hops 2,3,4, branch 0, trap-depth 0, d_model 128, 2 layers, 4 heads, max-steps 5,
 batch 64, lr 3e-3. One run per seed, run on H200s.
+
+Updated 2026-09-03 with a much larger sweep (n=54 for the method comparison,
+n=72 for the capacity grid). Two things moved enough to say plainly: contrasts
+that were noise at n=14 are now significant in the same direction, and the
+capacity edge that looked like a window peaking at d=128 does not close by
+d=160 the way it first appeared to. Read the capacity section below for what
+changed and why the earlier framing was premature at n=12.
 
 ## Why everything was re-run
 
@@ -21,33 +28,38 @@ tokens and was still mid-transition when training stopped. Paired over 10 shared
 seeds, fixing the init moved cot by +0.2245 (worst seed +0.405) and moved nocot,
 coconut and coconut_distill by 0.013 or less. Everything below is post-fix.
 
-## Method comparison, n=14
+## Method comparison, n=54
 
 | method | acc | latent steps | rho(steps, hops) |
 |---|---|---|---|
-| nocot | 0.8948 ± 0.0175 | 0 | 0 |
-| cot | 0.9227 ± 0.0526 | 28 | 0 |
-| coconut | 0.8955 ± 0.0144 | 5 | 0 |
-| coconut+distill | 0.8938 ± 0.0126 | 5 | 0 |
-| reverie | 0.8836 ± 0.0183 | 2.998 | +1.000 ± 0.000 |
+| nocot | 0.8958 ± 0.0145 | 0 | 0 |
+| cot | 0.9111 ± 0.0452 | 28 | 0 |
+| coconut | 0.8961 ± 0.0135 | 5 | 0 |
+| coconut+distill | 0.8921 ± 0.0149 | 5 | 0 |
+| reverie | 0.8845 ± 0.0190 | 2.998 | +1.000 ± 0.000 |
 
 Contrasts, as a difference in means over the pooled standard error:
 
 | contrast | delta | sigma | |
 |---|---|---|---|
-| cot vs reverie | +0.0391 | 2.63 | significant |
-| cot vs nocot | +0.0279 | 1.88 | noise |
-| reverie vs nocot | -0.0112 | 1.66 | noise |
-| reverie vs coconut | -0.0120 | 1.92 | noise |
+| cot vs reverie | +0.0265 | 3.98 | significant |
+| cot vs nocot | +0.0153 | 2.36 | significant |
+| reverie vs nocot | -0.0112 | 3.46 | significant |
+| reverie vs coconut | -0.0116 | 3.65 | significant |
 
-Two things to say plainly. The four non-CoT arms are statistically
-indistinguishable around 0.89, so "no accuracy edge" holds and is now a tight
-bound rather than an absence of evidence. And explicit chain of thought is the
-most accurate method here, beating reverie by 2.63 sigma. It costs 28 decode
-steps to reverie's 2.998.
+This moved from the n=14 read. At n=14, reverie vs nocot and reverie vs coconut
+were both noise (1.66 and 1.92 sigma) and the honest statement was "no accuracy
+edge, in either direction, at this sample size." At n=54 the same-sized gaps are
+now significant: reverie is about 1.1 to 1.2 points behind nocot and coconut,
+reliably, not just on this draw. "No accuracy edge" was true as a statement
+about statistical power, not about the underlying difference, and the
+underlying difference turns out to be small but real and unfavorable to reverie
+on this task.
 
-cot's spread is 0.0526, three times any other arm. It is the only method that
-needs the full 1000 steps to converge, so it stays seed-sensitive.
+cot remains the most accurate arm and the gap to it widened with more data,
+now 3.98 sigma. Its spread is still three times any other arm (0.0452 vs
+~0.015), consistent with it being the only method that needs the full 1000
+steps to converge.
 
 ## Halt calibration, n=14
 
@@ -60,45 +72,80 @@ needs the full 1000 steps to converge, so it stays seed-sensitive.
 rho = +1.000 ± 0.000 across all 14 seeds. Exact, not correlated, and zero
 variance. This is the result that survived every change made today.
 
-## Objective ablations, n=14
+## Objective ablations, n=54
 
 | arm | acc | latent steps | rho |
 |---|---|---|---|
-| reverie | 0.8836 ± 0.0183 | 2.998 | +1.000 |
-| alpha = 0 (no trajectory) | 0.8950 ± 0.0124 | 2.998 | +1.000 |
-| gamma = 0 (no depth supervision) | 0.8995 ± 0.0172 | 0.000 | 0 |
+| reverie | 0.8845 ± 0.0190 | 2.998 | +1.000 |
+| alpha = 0 (no trajectory) | 0.8973 ± 0.0156 | 2.998 | +1.000 |
+| gamma = 0 (no depth supervision) | 0.8970 ± 0.0149 | 0.000 | 0 |
 
-Dropping alpha costs nothing measurable: -0.0114 at 1.93 sigma, and calibration
-is untouched. At this scale the trajectory term does no work.
+Both ablations are now significant wins over full reverie: alpha=0 is +0.0127
+at 3.81 sigma, gamma=0 is +0.0125 at 3.80 sigma. At n=14 these read as noise
+(1.93 and 2.37 sigma); the direction did not change, the confidence did.
 
-Dropping gamma no longer pins the halt to max depth. It pins it to zero: the
-model stops thinking entirely and gets +0.0159 accuracy for it, at 2.37 sigma.
-That is a different behaviour from what the README describes and it needs a
-rewrite. The honest reading is that on this task the halt is free to collapse in
-either direction once nothing supervises it, and gamma is what makes it track
-hop count rather than what makes it accurate.
+Dropping alpha costs nothing and, at this sample size, measurably helps. At this
+scale the trajectory term is not just inert, it is a mild drag.
 
-## Capacity, in progress
+Dropping gamma does not pin the halt to max depth, the way an earlier version of
+this doc and the README both said. It pins it to zero: the model stops thinking
+entirely and that is now a significant accuracy gain, not a wash. The honest
+reading is that on this task the halt is free to collapse in either direction
+once nothing supervises it, gamma is what makes it track hop count rather than
+what makes it accurate, and calibration is bought at a real, if small, accuracy
+cost rather than for free.
 
-One layer instead of two, on the harder task (branch 1, trap-depth 1), each arm
-at its own best learning rate over {5e-4, 1e-3, 2e-3, 3e-3}. n=12 per cell.
+## Capacity
+
+Branch 1, trap-depth 1 (the harder regime), each arm at its own best learning
+rate over {5e-4, 1e-3, 2e-3, 3e-3}. n=72 per cell at one layer, n=26 to 72 at two
+(d=192 two-layer is still filling; everything else is done).
+
+**One layer:**
 
 | d_model | nocot best | reverie best | delta |
 |---|---|---|---|
-| 64 | 0.7085 @ 1e-3 | 0.5873 @ 2e-3 | -0.121 |
-| 96 | 0.7515 @ 5e-4 | 0.8021 @ 3e-3 | +0.051 |
-| 128 | 0.7404 @ 5e-4 | 0.8469 @ 3e-3 | +0.107 |
-| 160 | 0.7535 @ 5e-4 | 0.7698 @ 5e-4 | +0.016 |
+| 64 | 0.7258 @ 1e-3 | 0.6039 @ 2e-3 | -0.122 |
+| 96 | 0.7325 @ 5e-4 | 0.8068 @ 3e-3 | +0.074 |
+| 128 | 0.7670 @ 5e-4 | 0.8399 @ 3e-3 | +0.073 |
+| 160 | 0.7578 @ 5e-4 | 0.8593 @ 2e-3 | +0.101 |
+| 192 | 0.7557 @ 5e-4 | 0.8703 @ 2e-3 | +0.115 |
 
-d=192 and the 2-layer half are still running.
+**Two layers:**
 
-The learning rate matters more than expected and it is why this table exists. A
-first pass ran both arms at 3e-3, inherited from the phase0 config, and got
-+0.267 at d=128 with nocot apparently pinned near chance. That was an artifact:
-nocot wants 5e-4 and reaches 0.740 when it gets it. Comparing two methods at one
-learning rate tuned for neither is not a capacity result.
+| d_model | nocot best | reverie best | delta |
+|---|---|---|---|
+| 64 | 0.8844 @ 3e-3 | 0.8508 @ 3e-3 | -0.034 |
+| 96 | 0.8938 @ 3e-3 | 0.8586 @ 2e-3 | -0.035 |
+| 128 | 0.8952 @ 2e-3 | 0.8649 @ 2e-3 | -0.030 |
+| 160 | 0.8985 @ 2e-3 | 0.8679 @ 1e-3 | -0.031 |
+| 192 | 0.8962 @ 1e-3 | 0.8764 @ 1e-3 | -0.020 (n=26) |
 
-What is left is a modest, width-dependent edge peaking near +0.11 at one layer,
-and a more consistent pattern underneath it: nocot wants small learning rates
-(5e-4 at three of four widths) while reverie prefers 3e-3 and tolerates a wider
-range. Latent iteration may buy optimisation robustness more than accuracy.
+This changed shape from n=12 to n=72, not just tightened. At n=12 the one-layer
+edge looked like a window: it peaked at d=128 (+0.107) and had mostly closed by
+d=160 (+0.016), which read as "latent reasoning helps in a band, then the
+advantage of extra width outpaces it." At n=72 that reading does not survive:
+d=160 is +0.101 and d=192 is +0.115, the largest margin measured. Whatever
+closed the gap in the n=12 data was sampling noise in four to eight seeds per
+cell, not the start of a real decline. The honest current shape is that the
+edge holds and mildly grows from d=96 through d=192, with d=64 as a floor below
+which neither arm can do much (both near or below 0.73) and nocot wins by
+process of elimination rather than by being good.
+
+Two layers is now a clean, uniform negative result across every width measured:
+reverie loses by 0.020 to 0.035 everywhere, the gap does not depend much on
+d_model, and it is the mirror image of the one-layer story. Put together: at one
+layer, where the architecture cannot solve the task in a single pass, adaptive
+latent reasoning is worth ten-plus points of accuracy over the best-tuned
+baseline. At two layers, where it can, that same reasoning is worth negative
+three points. The mechanism in the README, that reasoning substitutes for depth
+the architecture does not have, is the right frame; the two-layer table is what
+makes it a real claim rather than a plausible one, since it shows the effect
+reversing exactly where the mechanism predicts it should.
+
+The learning rate finding that motivated this table still stands: a first pass
+ran both arms at 3e-3 (phase0's default) and got a much larger and differently
+shaped one-layer edge, because nocot was badly tuned at that rate and reaches
+0.73 to 0.77 once given 5e-4. Comparing methods at one learning rate tuned for
+neither was never a fair capacity result; this table is each arm at its own
+best.
