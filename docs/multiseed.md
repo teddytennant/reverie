@@ -9,11 +9,12 @@ hops 2,3,4, branch 0, trap-depth 0, d_model 128, 2 layers, 4 heads, max-steps 5,
 batch 64, lr 3e-3. One run per seed, run on H200s.
 
 Updated 2026-09-03 with a much larger sweep (n=54 for the method comparison,
-n=72 for the capacity grid). Two things moved enough to say plainly: contrasts
-that were noise at n=14 are now significant in the same direction, and the
-capacity edge that looked like a window peaking at d=128 does not close by
-d=160 the way it first appeared to. Read the capacity section below for what
-changed and why the earlier framing was premature at n=12.
+n=144 for most of the capacity grid; d=192 two-layer is at n=73 and still
+filling, everything else is done). The method comparison and ablation numbers
+below are unchanged since the last update at n=54; the capacity section moved
+again, from n=72 to n=144, and this time it added a real observation rather
+than just tightening the same one. Read that section for what changed and why
+the earlier n=12 framing was premature.
 
 ## Why everything was re-run
 
@@ -98,50 +99,46 @@ cost rather than for free.
 ## Capacity
 
 Branch 1, trap-depth 1 (the harder regime), each arm at its own best learning
-rate over {5e-4, 1e-3, 2e-3, 3e-3}. n=72 per cell at one layer, n=26 to 72 at two
-(d=192 two-layer is still filling; everything else is done).
+rate over {5e-4, 1e-3, 2e-3, 3e-3}. n=144 per cell except d=192 two-layer,
+n=73 and still filling; everything else is done.
 
-**One layer:**
+**One layer**, sigma from a pooled two-sample test on each cell's own n:
 
-| d_model | nocot best | reverie best | delta |
-|---|---|---|---|
-| 64 | 0.7258 @ 1e-3 | 0.6039 @ 2e-3 | -0.122 |
-| 96 | 0.7325 @ 5e-4 | 0.8068 @ 3e-3 | +0.074 |
-| 128 | 0.7670 @ 5e-4 | 0.8399 @ 3e-3 | +0.073 |
-| 160 | 0.7578 @ 5e-4 | 0.8593 @ 2e-3 | +0.101 |
-| 192 | 0.7557 @ 5e-4 | 0.8703 @ 2e-3 | +0.115 |
+| d_model | nocot best | reverie best | delta | sigma |
+|---|---|---|---|---|
+| 64 | 0.7277 ± 0.057 @ 1e-3 | 0.6026 ± 0.074 @ 2e-3 | -0.125 | -16.1 |
+| 96 | 0.7357 ± 0.051 @ 5e-4 | 0.8041 ± 0.049 @ 3e-3 | +0.068 | +11.6 |
+| 128 | 0.7638 ± 0.049 @ 5e-4 | 0.8385 ± 0.047 @ 3e-3 | +0.075 | +13.3 |
+| 160 | 0.7610 ± 0.045 @ 5e-4 | 0.8562 ± 0.024 @ 2e-3 | +0.095 | +22.2 |
+| 192 | 0.7571 ± 0.049 @ 5e-4 | 0.8645 ± 0.038 @ 2e-3 | +0.107 | +20.8 |
 
-**Two layers:**
+**Two layers**, n=144 except d=192 (n=73 reverie, n=120 nocot):
 
-| d_model | nocot best | reverie best | delta |
-|---|---|---|---|
-| 64 | 0.8844 @ 3e-3 | 0.8508 @ 3e-3 | -0.034 |
-| 96 | 0.8938 @ 3e-3 | 0.8586 @ 2e-3 | -0.035 |
-| 128 | 0.8952 @ 2e-3 | 0.8649 @ 2e-3 | -0.030 |
-| 160 | 0.8985 @ 2e-3 | 0.8679 @ 1e-3 | -0.031 |
-| 192 | 0.8962 @ 1e-3 | 0.8764 @ 1e-3 | -0.020 (n=26) |
+| d_model | nocot best | reverie best | delta | sigma |
+|---|---|---|---|---|
+| 64 | 0.8842 ± 0.019 @ 3e-3 | 0.8477 ± 0.023 @ 2e-3 | -0.037 | -14.7 |
+| 96 | 0.8919 ± 0.016 @ 3e-3 | 0.8575 ± 0.019 @ 2e-3 | -0.034 | -16.7 |
+| 128 | 0.8929 ± 0.016 @ 3e-3 | 0.8620 ± 0.021 @ 2e-3 | -0.031 | -14.2 |
+| 160 | 0.8948 ± 0.017 @ 2e-3 | 0.8692 ± 0.019 @ 1e-3 | -0.026 | -11.8 |
+| 192 | 0.8956 ± 0.016 @ 1e-3 | 0.8771 ± 0.019 @ 1e-3 | -0.019 | -7.0 |
 
-This changed shape from n=12 to n=72, not just tightened. At n=12 the one-layer
-edge looked like a window: it peaked at d=128 (+0.107) and had mostly closed by
-d=160 (+0.016), which read as "latent reasoning helps in a band, then the
-advantage of extra width outpaces it." At n=72 that reading does not survive:
-d=160 is +0.101 and d=192 is +0.115, the largest margin measured. Whatever
-closed the gap in the n=12 data was sampling noise in four to eight seeds per
-cell, not the start of a real decline. The honest current shape is that the
-edge holds and mildly grows from d=96 through d=192, with d=64 as a floor below
-which neither arm can do much (both near or below 0.73) and nocot wins by
-process of elimination rather than by being good.
+The one-layer edge is unchanged in shape from n=72 to n=144, just more certain:
+it rises from d=96 through d=192 rather than peaking and closing, and every
+cell past d=64 clears 11 sigma. The n=12 reading, a window that peaks at d=128,
+does not survive contact with more seeds at all.
 
-Two layers is now a clean, uniform negative result across every width measured:
-reverie loses by 0.020 to 0.035 everywhere, the gap does not depend much on
-d_model, and it is the mirror image of the one-layer story. Put together: at one
-layer, where the architecture cannot solve the task in a single pass, adaptive
-latent reasoning is worth ten-plus points of accuracy over the best-tuned
-baseline. At two layers, where it can, that same reasoning is worth negative
-three points. The mechanism in the README, that reasoning substitutes for depth
-the architecture does not have, is the right frame; the two-layer table is what
-makes it a real claim rather than a plausible one, since it shows the effect
-reversing exactly where the mechanism predicts it should.
+What n=144 adds is new: the two-layer disadvantage is not flat across width,
+it is shrinking. -0.037 at d=64 down to -0.019 at d=192, monotonic, and the
+d=192 cell is markedly weaker than the rest at -7.0 sigma against -12 to -17
+everywhere else in that row (that cell is also the one still at n=73, so watch
+it, though the trend was already visible at n=72 before this update). Put next
+to the one-layer table, which rises with width in the other direction, this
+reads less like two separate regimes and more like one relationship: reverie's
+disadvantage shrinks and its advantage grows as the model gets wider, and
+something in between one and two layers is where the sign flips. That is a
+sharper mechanistic claim than "helps at one layer, hurts at two," and it is
+the kind of thing worth checking at layers in between if this project keeps
+going.
 
 The learning rate finding that motivated this table still stands: a first pass
 ran both arms at 3e-3 (phase0's default) and got a much larger and differently
