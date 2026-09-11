@@ -168,3 +168,75 @@ def test_all_methods_run():
         cfg = ReverieConfig(max_steps=6, method=method, adaptive=adaptive, alpha_traj=alpha)
         loss, aux = batch_loss(model, batch, cfg)
         assert np.isfinite(float(loss)), f"{method} produced non-finite loss"
+
+
+# ---- vmapped ensemble ----
+def test_ensemble_matches_sequential_training():
+    """The stacked ensemble has to take the same updates as one model at a time.
+
+    Two replicas, the same data, different seeds, ten steps. Sequential uses
+    train.make_train_step; the ensemble uses one vmapped scan. The only thing
+    that differs is the order XLA reduces in.
+
+    Ten steps is deliberate. On CPU the two paths come out bit-identical, but on
+    a GPU the reduction order differs by ~1e-5 relative at step 1 and training
+    amplifies it: by step 500 the weights are ~10% apart. Do not raise the step
+    count here expecting this tolerance to hold.
+    """
+    from reverie.data import global_lengths
+    from reverie.ensemble import (
+        batch_index_stream,
+        init_ensemble,
+        make_chunk_runner,
+        stack_splits,
+        tokenize_split,
+        train_fields,
+    )
+    from reverie.train import _to_jax, make_optimizer, make_train_step
+
+    seeds, steps, bs = [0, 3], 10, 8
+    insts = _gen(n=64, hops=3)
+    vocab = build_vocab(max_concepts=200)
+    plen, clen = global_lengths(insts, vocab)
+    cfg = ReverieConfig(max_steps=4, method="reverie")
+    mcfg = ModelConfig(vocab_size=vocab.size, d_model=32, n_layers=2, n_heads=4)
+    idx = np.stack([batch_index_stream(s, len(insts), bs, steps) for s in seeds], axis=1)
+
+    seq = []
+    for r, s in enumerate(seeds):
+        model = ReverieModel(mcfg, key=jax.random.PRNGKey(s))
+        optim = make_optimizer(1e-3, 5, steps)
+        opt_state = optim.init(eqx.filter(model, eqx.is_inexact_array))
+        train_step = make_train_step(optim, cfg)
+        for t in range(steps):
+            b = collate([insts[j] for j in idx[t, r]], vocab, cfg.max_steps,
+                        prompt_len=plen, cot_len=clen)
+            model, opt_state, _, _ = train_step(model, opt_state, _to_jax(b))
+        seq.append(eqx.filter(model, eqx.is_array))
+
+    fields = train_fields(cfg.method)
+    ds = stack_splits([tokenize_split(insts, vocab, cfg.max_steps, plen, clen, fields)
+                       for _ in seeds])
+    arr, static, optim, opt_state = init_ensemble(mcfg, seeds, 1e-3, 5, steps)
+    run_chunk = make_chunk_runner(optim, cfg, static)
+    arr, opt_state, _ = run_chunk(arr, opt_state, ds, jnp.asarray(idx))
+
+    for r in range(len(seeds)):
+        got = jax.tree_util.tree_map(lambda x: x[r], arr)
+        d = max(float(jnp.max(jnp.abs(a - b))) for a, b in
+                zip(jax.tree_util.tree_leaves(seq[r]), jax.tree_util.tree_leaves(got)))
+        assert d < 1e-4, f"replica {r} drifted from its sequential run by {d}"
+
+
+def test_ensemble_init_is_the_standalone_init():
+    from reverie.ensemble import build_replicas, unstack_model
+
+    mcfg = ModelConfig(vocab_size=32, d_model=32, n_layers=2, n_heads=4)
+    seeds = [0, 7, 11]
+    arr, static = build_replicas(mcfg, seeds)
+    for i, s in enumerate(seeds):
+        want = ReverieModel(mcfg, key=jax.random.PRNGKey(s))
+        got = unstack_model(arr, static, i)
+        for a, b in zip(jax.tree_util.tree_leaves(eqx.filter(want, eqx.is_array)),
+                        jax.tree_util.tree_leaves(eqx.filter(got, eqx.is_array))):
+            assert jnp.array_equal(a, b)

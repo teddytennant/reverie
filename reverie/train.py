@@ -150,6 +150,24 @@ def _spearman(a: np.ndarray, b: np.ndarray) -> float:
     return float(np.corrcoef(ra, rb)[0, 1])
 
 
+def metrics_from_preds(preds, answers, steps, hops) -> dict:
+    """Score one run's predictions. Split out so the vmapped ensemble in
+    reverie/ensemble.py scores its replicas through the same code."""
+    preds, answers, steps, hops = map(np.asarray, (preds, answers, steps, hops))
+    correct = (preds == answers)
+    uniq = sorted(set(hops.tolist()))
+    acc_by_hop = {int(k): float(correct[hops == k].mean()) for k in uniq if (hops == k).any()}
+    steps_by_hop = {int(k): float(steps[hops == k].mean()) for k in uniq if (hops == k).any()}
+    return dict(
+        acc=float(correct.mean()),
+        mean_steps=float(steps.mean()),
+        rho_steps_hops=_spearman(steps, hops),
+        acc_by_hop=acc_by_hop,
+        steps_by_hop=steps_by_hop,
+        n=len(preds),
+    )
+
+
 def evaluate(model, insts, vocab: Vocab, cfg: ReverieConfig,
              eps: float = 0.1, batch_size: int = 128,
              prompt_len: int | None = None, cot_len: int | None = None,
@@ -186,19 +204,7 @@ def evaluate(model, insts, vocab: Vocab, cfg: ReverieConfig,
         answers.extend(b.answer.tolist())
         hops.extend(b.n_hops.tolist())
 
-    preds, answers, steps, hops = map(np.asarray, (preds, answers, steps, hops))
-    correct = (preds == answers)
-    uniq = sorted(set(hops.tolist()))
-    acc_by_hop = {int(k): float(correct[hops == k].mean()) for k in uniq if (hops == k).any()}
-    steps_by_hop = {int(k): float(steps[hops == k].mean()) for k in uniq if (hops == k).any()}
-    return dict(
-        acc=float(correct.mean()),
-        mean_steps=float(steps.mean()),
-        rho_steps_hops=_spearman(steps, hops),
-        acc_by_hop=acc_by_hop,
-        steps_by_hop=steps_by_hop,
-        n=len(preds),
-    )
+    return metrics_from_preds(preds, answers, steps, hops)
 
 
 # ---- training loop -----------------------------------------------------------

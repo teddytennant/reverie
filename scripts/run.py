@@ -121,10 +121,14 @@ def main():
         __import__("equinox").filter(model, __import__("equinox").is_array)))
     print(f"model: {nparams/1e6:.2f}M params | cfg={cfg}")
 
+    # epoch marks so a profiler outside this process can slice out the window
+    # where the GPU is actually training, separate from import, data gen and eval
+    print(f"PHASE train_start {time.time():.3f}", flush=True)
     model, hist, (plen, clen) = train(
         model, train_insts, val_insts, vocab, cfg, steps=args.steps,
         batch_size=args.batch_size, peak_lr=args.lr, warmup=args.warmup,
         seed=args.seed, eval_every=args.eval_every, prompt_len=plen, cot_len=clen)
+    print(f"PHASE train_end {time.time():.3f}", flush=True)
     test_m = evaluate(model, test_insts, vocab, cfg, prompt_len=plen, cot_len=clen)
 
     # Accuracy vs latent compute from one trained model: sweep the halt bias at
