@@ -305,6 +305,94 @@ that produces adaptive (rho != 0) halting at all, and something coarser
 than an exact hop-count target (whether to halt at all vs definitely not,
 rather than the precise count) is the next real candidate to build.
 
+## K-sweep: does step count itself help
+
+Every comparison above confounds latent step count with either forced
+scheduling (reverie's gamma/alpha) or a fixed default (coconut always runs
+K=5, nothing in this doc had varied it). Isolated K on its own:
+`scripts/ensemble.py --method coconut --adaptive 0 --alpha 0 --gamma 0
+--max-steps K`, same recipe as coconut everywhere else in this doc (fixed
+depth, answer-only cross-entropy, no PonderNet weighting, no trajectory
+distillation, no depth supervision), only K varies. n=32 per K, seeds 0-31,
+`runs/opp_ksweep` (`python3 scripts/aggregate_opp.py --dir runs/opp_ksweep`
+regenerates the tables below).
+
+Easy task (branch=0/trap=0, d=128, 2 layers):
+
+| K | acc | n |
+|---|---|---|
+| 0 | 0.8955 ± 0.0137 | 32 |
+| 1 | 0.8980 ± 0.0142 | 32 |
+| 2 | 0.8945 ± 0.0161 | 32 |
+| 3 | 0.8969 ± 0.0154 | 32 |
+| 5 | 0.8966 ± 0.0161 | 32 |
+| 8 | 0.8941 ± 0.0150 | 32 |
+| 13 | 0.8940 ± 0.0155 | 32 |
+
+Every adjacent contrast is under 1.1 sigma (K=1 vs K=0 is the largest, at
+0.72). Flat from K=0 to K=13. On the easy task, at 2 layers, step count on
+its own buys nothing, in either direction.
+
+Hard task (branch=1/trap=1, 2 layers), each width at its own established
+best coconut lr from the lrw grid above (d=64: 3e-3, d=128: 2e-3, d=192:
+1e-3), so the recipe is held fixed within each width's row and only K moves:
+
+**d_model=64**
+
+| K | acc | n |
+|---|---|---|
+| 0 | 0.8825 ± 0.0159 | 32 |
+| 1 | 0.8802 ± 0.0157 | 32 |
+| 2 | 0.8792 ± 0.0149 | 32 |
+| 3 | 0.8805 ± 0.0175 | 32 |
+| 5 | 0.8800 ± 0.0179 | 32 |
+| 8 | 0.8790 ± 0.0193 | 32 |
+
+**d_model=128**
+
+| K | acc | n |
+|---|---|---|
+| 0 | 0.8935 ± 0.0133 | 32 |
+| 1 | 0.8972 ± 0.0131 | 32 |
+| 2 | 0.8882 ± 0.0174 | 32 |
+| 3 | 0.8909 ± 0.0170 | 32 |
+| 5 | 0.8877 ± 0.0149 | 32 |
+| 8 | 0.8873 ± 0.0178 | 32 |
+
+**d_model=192**
+
+| K | acc | n |
+|---|---|---|
+| 0 | 0.8945 ± 0.0137 | 32 |
+| 1 | 0.8933 ± 0.0153 | 32 |
+| 2 | 0.8959 ± 0.0156 | 32 |
+| 3 | 0.8930 ± 0.0118 | 32 |
+| 5 | 0.8921 ± 0.0140 | 32 |
+| 8 | 0.8913 ± 0.0167 | 32 |
+
+Same story at every width: every adjacent contrast under 2.4 sigma (the one
+exception, K=2 vs K=1 at d=128, 2.33 sigma, sits inside an otherwise
+non-monotonic, flat neighborhood and isn't the kind of effect that survives
+a second look, the same lesson this doc has already paid for twice with
+low-n reads). d=64, the width where full reverie inexplicably lost to nocot
+by 37 sigma in the capacity table, isn't a K story either: 0.8790-0.8825
+across the whole K=0..8 range, no trend.
+
+**This closes the question this doc had been circling without asking
+directly: at 2 layers, on this task family, latent step count has no
+causal effect on accuracy, on either the easy or the hard regime, at any
+width tested, once every forcing term is gone and the model is just told
+to spend K steps and answer.** That is not evidence against continuous
+latent reasoning in general. It's evidence that a 2-layer transformer on
+multi-hop reachability already computes the whole answer inside the layers
+it has, so handing it more sequence positions to compute over doesn't help,
+because there's nothing left for those positions to contribute. It sharpens
+the earlier README/`--connect` finding that 2 layers solves this task in
+one forward pass, and it lines up with the beta sweep above, where accuracy
+sat at 0.887-0.893 whether the halt collapsed to near-zero steps or was
+forced open to near-K: the backbone doesn't care how many latent steps it's
+given, forced or free, collapsed or not.
+
 ## Why everything before 2026-09-03 was re-run
 
 `eqx.nn.Embedding` initialises to N(0, 1). With `tie_embeddings` that matrix
