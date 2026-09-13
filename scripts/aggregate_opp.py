@@ -247,6 +247,68 @@ def main():
                 print(f"| {D} | {cellstr(noc)} | {cellstr(rev)} | {cellstr(coc)} | "
                       f"{delta} | {sigs} |")
 
+    # ---- capacity: fix grid (alpha=0, gamma=0), best lr per (layers, d) -----
+    fix_rows = by_family.get("fix", [])
+    if fix_rows:
+        print("\n## Capacity (fix grid): alpha=0, gamma=0, best lr per cell\n")
+        fix_key = lambda meta, b: (int(meta["layers"]), int(meta["d"]),
+                                   tag_to_lr(meta["tag"]))
+        fix_lr_stats = group_stats(fix_rows, fix_key)
+        fix_best: dict = {}
+        for (L, D, lr), (m, s, n, accs) in fix_lr_stats.items():
+            k = (L, D)
+            if k not in fix_best or m > fix_best[k][0]:
+                fix_best[k] = (m, s, n, accs, lr)
+        # steps/rho at the winning (L, D, lr) cell, not pooled across lrs
+        fix_meta_rows = {}
+        for meta, blob in fix_rows:
+            k = (int(meta["layers"]), int(meta["d"]), tag_to_lr(meta["tag"]))
+            fix_meta_rows.setdefault(k, []).append(blob)
+        # reuse lrw's own best-lr dict so the comparison is cell-for-cell,
+        # not a re-derivation that could silently drift from the table above
+        lrw_rows = by_family.get("lrw", [])
+        lrw_best: dict = {}
+        if lrw_rows:
+            lrw_key = lambda meta, b: (int(meta["layers"]), int(meta["d"]), meta["method"],
+                                       tag_to_lr(meta["tag"]))
+            lrw_lr_stats = group_stats(lrw_rows, lrw_key)
+            for (L, D, method, lr), (m, s, n, accs) in lrw_lr_stats.items():
+                k = (L, D, method)
+                if k not in lrw_best or m > lrw_best[k][0]:
+                    lrw_best[k] = (m, s, n, accs, lr)
+        for L in sorted({k[0] for k in fix_best}):
+            print(f"\n**{L} layer{'s' if L != 1 else ''}**\n")
+            print("| d_model | nocot best | reverie best | coconut best | "
+                  "fix best | steps | rho | delta (fix-noc) | sigma | "
+                  "delta (fix-rev) | sigma |")
+            print("|---|---|---|---|---|---|---|---|---|---|---|")
+            for D in sorted({k[1] for k in fix_best if k[0] == L}):
+                noc = lrw_best.get((L, D, "nocot"))
+                rev = lrw_best.get((L, D, "reverie"))
+                coc = lrw_best.get((L, D, "coconut"))
+                fix = fix_best[(L, D)]
+                fm, fs, fn, faccs, flr = fix
+                blobs = fix_meta_rows[(L, D, flr)]
+                steps = statistics.fmean(b["test"]["mean_steps"] for b in blobs)
+                rho = statistics.fmean(b["test"]["rho_steps_hops"] for b in blobs)
+
+                def cellstr(c):
+                    if c is None:
+                        return "-"
+                    m, s, n, accs, lr = c
+                    return f"{m:.4f} ± {s:.3f} @ {lr:g} (n={n})"
+
+                def contrast(a, b):
+                    if a is None or b is None:
+                        return "-", "-"
+                    return f"{a[0]-b[0]:+.4f}", f"{welch_sigma(a[0], a[1], a[2], b[0], b[1], b[2]):+.1f}"
+
+                d_noc, s_noc = contrast(fix, noc)
+                d_rev, s_rev = contrast(fix, rev)
+                print(f"| {D} | {cellstr(noc)} | {cellstr(rev)} | {cellstr(coc)} | "
+                      f"{fm:.4f} ± {fs:.3f} @ {flr:g} (n={fn}) | {steps:.3f} | {rho:+.3f} | "
+                      f"{d_noc} | {s_noc} | {d_rev} | {s_rev} |")
+
 
 if __name__ == "__main__":
     main()
