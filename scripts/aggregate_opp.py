@@ -32,6 +32,9 @@ PATTERNS = [
         r"^(?P<method>nocot|cot|coconut_distill|coconut|reverie)_s(?P<seed>\d+)\.json$")),
     ("ablation_noTraj", re.compile(r"^ablate_noTraj_s(?P<seed>\d+)\.json$")),
     ("ablation_noDepthSup", re.compile(r"^ablate_noDepthSup_s(?P<seed>\d+)\.json$")),
+    ("ablation_noTrajNoDepth", re.compile(r"^ablate_noTrajNoDepth_s(?P<seed>\d+)\.json$")),
+    ("fix", re.compile(
+        r"^fix_l(?P<layers>\d+)_d(?P<d>\d+)_(?P<tag>\d+e\d+)_s(?P<seed>\d+)\.json$")),
     ("search", re.compile(
         r"^search_(?P<method>nocot|coconut|reverie)_s(?P<seed>\d+)\.json$")),
     ("search_ablation_noTraj", re.compile(r"^search_ablate_noTraj_s(?P<seed>\d+)\.json$")),
@@ -165,12 +168,17 @@ def main():
 
     # ---- ablations ----------------------------------------------------------
     full_rows = [(m, b) for m, b in rows if m["method"] == "reverie"] if rows else []
+    nocot_rows = [(m, b) for m, b in rows if m["method"] == "nocot"] if rows else []
+    coconut_rows = [(m, b) for m, b in rows if m["method"] == "coconut"] if rows else []
     noTraj = by_family.get("ablation_noTraj", [])
     noDepth = by_family.get("ablation_noDepthSup", [])
-    if full_rows or noTraj or noDepth:
+    noTrajNoDepth = by_family.get("ablation_noTrajNoDepth", [])
+    if full_rows or noTraj or noDepth or noTrajNoDepth:
         print("\n## Objective ablations\n")
         arms = [("reverie (full)", full_rows), ("alpha=0 (no trajectory)", noTraj),
-               ("gamma=0 (no depth supervision)", noDepth)]
+               ("gamma=0 (no depth supervision)", noDepth),
+               ("alpha=0, gamma=0 (the fix)", noTrajNoDepth),
+               ("nocot", nocot_rows), ("coconut", coconut_rows)]
         print("| arm | acc | n | latent steps | rho |")
         print("|---|---|---|---|---|")
         arm_stats = {}
@@ -187,11 +195,19 @@ def main():
         print("|---|---|---|")
         base = arm_stats.get("reverie (full)")
         if base:
-            for label in ["alpha=0 (no trajectory)", "gamma=0 (no depth supervision)"]:
+            for label in ["alpha=0 (no trajectory)", "gamma=0 (no depth supervision)",
+                         "alpha=0, gamma=0 (the fix)"]:
                 if label in arm_stats:
                     a = arm_stats[label]
                     sig = welch_sigma(a[0], a[1], a[2], base[0], base[1], base[2])
                     print(f"| {label} vs full | {a[0]-base[0]:+.4f} | {abs(sig):.2f} |")
+        fix = arm_stats.get("alpha=0, gamma=0 (the fix)")
+        if fix:
+            for label in ["nocot", "coconut"]:
+                if label in arm_stats:
+                    a = arm_stats[label]
+                    sig = welch_sigma(fix[0], fix[1], fix[2], a[0], a[1], a[2])
+                    print(f"| the fix vs {label} | {fix[0]-a[0]:+.4f} | {abs(sig):.2f} |")
 
     # ---- capacity: lrw grid, best lr per (layers, d_model, method) ----------
     rows = by_family.get("lrw", [])

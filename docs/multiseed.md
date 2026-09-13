@@ -170,41 +170,61 @@ the full K=5 steps; alpha=0/gamma=0 reverie is still adaptive, still has the
 beta anti-collapse prior, it just answers to the task loss alone instead of
 being pinned to the teacher's schedule.
 
-**Status: queued, not yet resolved.** `make-tasks.sh` (the opportunist
-daemon's task generator) was extended, additively, with two new task
-families that ride the existing backfill-friendly scheduling instead of
-competing with it for a separate allocation:
+**Status, updated 2026-09-13: the easy-task result is in and real; the
+capacity-grid question this was actually for is still open.** The queue
+described below cleared. `scripts/aggregate_opp.py` did not have a `fix`
+family reader when this was first written despite an earlier draft of this
+doc claiming it did; that was wrong and is fixed now, alongside adding
+`ablation_noTrajNoDepth`.
 
-- `ablate_noTrajNoDepth_s*`: phase0 config, reverie, `--alpha 0 --gamma 0`
-  together, same seed range as the existing single-term ablations. Direct
-  answer to whether the two terms stack or one subsumes the other.
-- `fix_l{1,2}_d{64,96,128,160,192}_{lr}_s{0..23}`: the same cells and
-  learning rates as the `lrw` capacity grid above, reverie only, alpha and
-  gamma both zeroed. n=24/cell target, placed ahead of the still-growing
-  `lrw` grid in `make-tasks.sh`'s priority order since this is the
-  experiment the diagnosis actually turns on, not another axis to fill in
-  at leisure.
+On the phase0 (branch=0/trap=0) task, at n=542:
 
-Both were submitted to the queue on 2026-09-11 along with a standalone
-4-seed smoke job (`revfix-smoke`, job 729094, distinct name prefix, to be
-reaped once it either runs or the investigation concludes) to sanity-check
-`scripts/ensemble.py` on a real GPU before trusting it for the fix grid; it
-ran and matched schema locally on CPU first. As of this writing every job
-on the account, including 15-minute ones, is estimated `(Priority)` two
-days out; the whole `gpu` partition is unusually saturated even by this
-cluster's normal standard, not something this session caused or can route
-around by resubmitting. `fix_*` and `ablate_noTrajNoDepth_*` have 0 runs
-finished. Once the queue clears, this doc's next update should read
-`runs/opp/fix_*` and `runs/opp/ablate_noTrajNoDepth_*` through
-`scripts/aggregate_opp.py` (it already has a `fix` family; the `ablate_*`
-family already exists) and report whether the two-layer gap actually closes.
+| arm | acc | n | latent steps | rho |
+|---|---|---|---|---|
+| reverie (full) | 0.8863 ± 0.0183 | 630 | 2.998 | +1.000 |
+| alpha=0, gamma=0 (the fix) | 0.8955 ± 0.0137 | 542 | 0.009 | +0.008 |
+| nocot | 0.8946 ± 0.0145 | 630 | 0.000 | +0.000 |
+| coconut | 0.8937 ± 0.0151 | 630 | 5.000 | +0.000 |
 
-Separately, `reverie/ensemble.py` (a vmapped multi-seed trainer, verified
-against sequential training to <1e-4 after ten steps, see
-`tests/test_core.py`) is committed and available if the opportunist queue
-stays this congested: it can train a whole `fix_*` cell's 24 seeds in one
-job instead of 24 separate queue entries, which matters when the bottleneck
-is queue depth rather than GPU-hours.
+The fix beats full reverie by +0.0092 (9.77 sigma, real) and is statistically
+even with nocot (+0.0008, 1.01 sigma) and a little ahead of coconut (+0.0017,
+2.08 sigma). But read `mean_steps` and `rho` before calling this a win for
+reverie's mechanism: they collapsed to 0.009 and +0.008, the same shape as
+the gamma=0-alone ablation, not the alpha=0-alone one (which kept
+`mean_steps=2.998`, `rho=+1.000`). Without gamma pinning it to the teacher's
+hop count, the halt just always fires almost immediately. The fix ties nocot
+in accuracy by **behaving like nocot** (near-zero latent steps), not by
+spending reverie's extra compute more usefully. That is a real, useful
+result (it says the forcing terms were pure cost with nothing to show for it
+on this task), but it is not evidence that reverie's continuous-latent
+mechanism itself does anything nocot's zero-step baseline doesn't already do
+here.
+
+The actual open question, the two-layer capacity-grid gap, is not answered
+yet. `fix_l{1,2}_d{64,96,128,160,192}_{lr}_s{0..23}` (branch=1/trap-depth=1,
+the harder regime where reverie currently *loses* at two layers) has only
+n=211 total, all of it at **one layer**, thin and not resolved to each
+cell's own best learning rate the way the capacity table above is:
+
+| d_model | n | acc (pooled across the 4 lrs sampled so far) |
+|---|---|---|
+| 64 | 96 | 0.6816 ± 0.0682 |
+| 96 | 96 | 0.6911 ± 0.0670 |
+| 128 | 19 | 0.7528 ± 0.0530 |
+
+Zero two-layer cells exist yet. Do not read anything into the one-layer
+numbers above against the earlier "best own lr" table; they are pooled
+across all four sampled rates, not each cell's winner, so they are not
+comparable yet and are not a regression. The `fix_*` family was placed
+ahead of the still-growing `lrw` grid in `make-tasks.sh`'s priority order,
+so it should keep filling from here; re-run `aggregate_opp.py` once
+`l2_*` cells appear.
+
+`reverie/ensemble.py` (a vmapped multi-seed trainer, verified against
+sequential training to <1e-4 after ten steps, see `tests/test_core.py`) is
+committed and can train a whole `fix_*` cell's 24 seeds in one job instead
+of 24 separate queue entries, which matters more once the two-layer cells
+are the bottleneck than it did for the easy-task result above.
 
 ## Why everything before 2026-09-03 was re-run
 
