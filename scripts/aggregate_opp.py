@@ -55,7 +55,14 @@ PATTERNS = [
     ("ksweep_easy", re.compile(r"^ksweep_easy_K(?P<k>\d+)_s(?P<seed>\d+)\.json$")),
     ("ksweep_hard", re.compile(
         r"^ksweep_hard_l(?P<layers>\d+)_d(?P<d>\d+)_K(?P<k>\d+)_s(?P<seed>\d+)\.json$")),
+    ("act", re.compile(
+        r"^act_l1_d(?P<d>\d+)_beta(?P<tag>\d+p?\d*)_s(?P<seed>\d+)\.json$")),
 ]
+
+
+def tag_to_beta(tag: str) -> float:
+    """'0p003' -> 0.003, '0p0' -> 0.0. act's own name-pattern replaces '.' with 'p'."""
+    return float(tag.replace("p", "."))
 
 
 def tag_to_lr(tag: str) -> float:
@@ -425,6 +432,29 @@ def main():
                 mb, sb, nb, _ = stats[(D, b)]
                 sig = welch_sigma(ma, sa, na, mb, sb, nb)
                 print(f"| K={a} vs K={b} | {ma-mb:+.4f} | {abs(sig):.2f} |")
+
+    # ---- ACT-style ponder cost: reg_mode=linear, beta sweep, one layer -----
+    act_rows = by_family.get("act", [])
+    if act_rows:
+        print("\n## ACT ponder cost (reg_mode=linear, alpha=0, gamma=0, one layer)\n")
+        key = lambda meta, b: (int(meta["d"]), tag_to_beta(meta["tag"]))
+        stats = group_stats(act_rows, key)
+        meta_rows: dict = {}
+        for meta, blob in act_rows:
+            k = (int(meta["d"]), tag_to_beta(meta["tag"]))
+            meta_rows.setdefault(k, []).append(blob)
+        widths = sorted({d for d, _ in stats})
+        for D in widths:
+            print(f"\n**d_model={D}**\n")
+            print("| beta | acc | n | mean_steps | rho |")
+            print("|---|---|---|---|---|")
+            betas = sorted(b for d, b in stats if d == D)
+            for beta in betas:
+                m, s, n, _ = stats[(D, beta)]
+                blobs = meta_rows[(D, beta)]
+                steps = statistics.fmean(b["test"]["mean_steps"] for b in blobs)
+                rho = statistics.fmean(b["test"]["rho_steps_hops"] for b in blobs)
+                print(f"| {beta:g} | {m:.4f} ± {s:.4f} | {n} | {steps:.2f} | {rho:+.3f} |")
 
 
 if __name__ == "__main__":
