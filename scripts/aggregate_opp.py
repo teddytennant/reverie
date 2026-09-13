@@ -413,23 +413,23 @@ def main():
 
     hard_rows = by_family.get("ksweep_hard", [])
     if hard_rows:
-        print("\n## K-sweep (hard task, branch=1/trap=1, 2 layers)\n")
-        key = lambda meta, b: (int(meta["d"]), int(meta["k"]))
+        print("\n## K-sweep (hard task, branch=1/trap=1)\n")
+        key = lambda meta, b: (int(meta["layers"]), int(meta["d"]), int(meta["k"]))
         stats = group_stats(hard_rows, key)
-        widths = sorted({d for d, _ in stats})
-        for D in widths:
-            print(f"\n**d_model={D}**\n")
+        cells = sorted({(L, d) for L, d, _ in stats})
+        for L, D in cells:
+            print(f"\n**{L} layer{'s' if L != 1 else ''}, d_model={D}**\n")
             print("| K | acc | n |")
             print("|---|---|---|")
-            ks = sorted(k for d, k in stats if d == D)
+            ks = sorted(k for l, d, k in stats if l == L and d == D)
             for k in ks:
-                m, s, n, _ = stats[(D, k)]
+                m, s, n, _ = stats[(L, D, k)]
                 print(f"| {k} | {m:.4f} ± {s:.4f} | {n} |")
             print("\n| contrast | delta | sigma |")
             print("|---|---|---|")
             for a, b in zip(ks[1:], ks[:-1]):
-                ma, sa, na, _ = stats[(D, a)]
-                mb, sb, nb, _ = stats[(D, b)]
+                ma, sa, na, _ = stats[(L, D, a)]
+                mb, sb, nb, _ = stats[(L, D, b)]
                 sig = welch_sigma(ma, sa, na, mb, sb, nb)
                 print(f"| K={a} vs K={b} | {ma-mb:+.4f} | {abs(sig):.2f} |")
 
