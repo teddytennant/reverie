@@ -50,8 +50,16 @@ class ReverieConfig:
     adaptive: bool = True         # learned halting distribution vs fixed depth K
     alpha_traj: float = 1.0       # trajectory-distillation weight
     gamma_halt: float = 1.0       # depth-supervision weight (halt at n_hops)
-    beta_reg: float = 0.01        # KL-to-geometric-prior weight (training anti-collapse)
+    beta_reg: float = 0.01        # compute-cost weight (training), shape set by reg_mode
     lambda_prior: float = 0.2     # geometric prior halt rate; untruncated E[depth]=(1-λ)/λ on {0,1,...}
+    reg_mode: str = "kl"          # kl: KL(p || Geometric(lambda_prior)), shape-matching, same
+                                   #     target for every instance regardless of difficulty.
+                                   # linear: beta * E[depth], ACT's own ponder cost. A step
+                                   #     costs the same fixed amount everywhere, so the model
+                                   #     only keeps paying for it where task loss improves
+                                   #     enough to be worth more than beta, instance by
+                                   #     instance. kl has no such per-instance lever: g is a
+                                   #     fixed shape, not a per-example cost.
 
 
 class ReverieModel(eqx.Module):
@@ -178,10 +186,18 @@ def reverie_example_loss(model, prompt_embeds, prompt_valid, answer,
     else:
         l_halt = jnp.zeros(())
 
-    # anti-collapse compute prior (training); inference Pareto dial is halt_bias
+    # compute-cost regularizer (training); inference Pareto dial is halt_bias
     if cfg.adaptive and cfg.beta_reg > 0.0:
-        g = geometric_prior(K + 1, cfg.lambda_prior)
-        l_reg = jnp.sum(p * (jnp.log(p + _EPS) - jnp.log(g + _EPS)))
+        if cfg.reg_mode == "linear":
+            # ACT's own ponder cost: a flat per-step price, same for every instance,
+            # so an example only keeps paying it where l_task's own gradient says
+            # the extra step is worth more than beta. No fixed target shape, unlike
+            # kl below, so nothing pins the *mean* either; beta sets the price, the
+            # model sets the depth.
+            l_reg = jnp.sum(p * jnp.arange(K + 1, dtype=jnp.float32))
+        else:
+            g = geometric_prior(K + 1, cfg.lambda_prior)
+            l_reg = jnp.sum(p * (jnp.log(p + _EPS) - jnp.log(g + _EPS)))
     else:
         l_reg = jnp.zeros(())
 

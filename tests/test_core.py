@@ -170,6 +170,32 @@ def test_all_methods_run():
         assert np.isfinite(float(loss)), f"{method} produced non-finite loss"
 
 
+def test_linear_reg_mode_differs_from_kl():
+    """reg_mode='linear' (ACT's flat ponder cost) has to be a real alternative
+    to the default KL-to-geometric-prior term, not a no-op alias for it: different
+    loss value, gradient reaches the halt head, and both stay finite."""
+    insts = _gen(n=8, hops=4)
+    vocab = build_vocab(max_concepts=200)
+    b = collate(insts, vocab, max_steps=6)
+    batch = {k: jnp.asarray(getattr(b, k)) for k in
+             ["prompt_ids", "prompt_mask", "answer", "path_targets", "path_len",
+              "n_hops", "cot_ids", "cot_mask", "cot_loss_mask"]}
+    mcfg = ModelConfig(vocab_size=vocab.size, d_model=32, n_layers=2, n_heads=4)
+    model = ReverieModel(mcfg, key=jax.random.PRNGKey(0))
+    cfg_kl = ReverieConfig(max_steps=6, method="reverie", alpha_traj=0.0, gamma_halt=0.0,
+                           beta_reg=0.05, reg_mode="kl")
+    cfg_lin = ReverieConfig(max_steps=6, method="reverie", alpha_traj=0.0, gamma_halt=0.0,
+                            beta_reg=0.05, reg_mode="linear")
+    (loss_kl, _), grads_kl = eqx.filter_value_and_grad(
+        lambda m: batch_loss(m, batch, cfg_kl), has_aux=True)(model)
+    (loss_lin, _), grads_lin = eqx.filter_value_and_grad(
+        lambda m: batch_loss(m, batch, cfg_lin), has_aux=True)(model)
+    assert np.isfinite(float(loss_kl)) and np.isfinite(float(loss_lin))
+    assert not np.isclose(float(loss_kl), float(loss_lin))
+    hg = np.linalg.norm(np.asarray(grads_lin.halt_head.weight))
+    assert hg > 0, "linear reg mode: halt head got no gradient"
+
+
 # ---- vmapped ensemble ----
 def test_ensemble_matches_sequential_training():
     """The stacked ensemble has to take the same updates as one model at a time.

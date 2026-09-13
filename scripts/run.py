@@ -63,6 +63,7 @@ def main():
     ap.add_argument("--gamma", type=float, default=1.0)
     ap.add_argument("--beta", type=float, default=0.01)
     ap.add_argument("--lambda-prior", type=float, default=0.2)
+    ap.add_argument("--reg-mode", default="kl", choices=["kl", "linear"])
     ap.add_argument("--steps", type=int, default=3000)
     ap.add_argument("--n-train", type=int, default=20000)
     ap.add_argument("--n-val", type=int, default=500)
@@ -112,7 +113,7 @@ def main():
     beta = args.beta if adaptive else 0.0
     cfg = ReverieConfig(max_steps=args.max_steps, method=args.method, adaptive=adaptive,
                         alpha_traj=alpha, gamma_halt=gamma, beta_reg=beta,
-                        lambda_prior=args.lambda_prior)
+                        lambda_prior=args.lambda_prior, reg_mode=args.reg_mode)
 
     mcfg = ModelConfig(vocab_size=vocab.size, d_model=args.d_model, n_layers=args.layers,
                        n_heads=args.heads, max_seq_len=256)
