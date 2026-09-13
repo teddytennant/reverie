@@ -52,6 +52,9 @@ PATTERNS = [
         r"^lrw_l(?P<layers>\d+)_d(?P<d>\d+)_(?P<tag>\d+e\d+)_"
         r"(?P<method>nocot|reverie|coconut)_s(?P<seed>\d+)\.json$")),
     ("connect", re.compile(r"^connect_c(?P<c>\d+)_s(?P<seed>\d+)\.json$")),
+    ("ksweep_easy", re.compile(r"^ksweep_easy_K(?P<k>\d+)_s(?P<seed>\d+)\.json$")),
+    ("ksweep_hard", re.compile(
+        r"^ksweep_hard_l(?P<layers>\d+)_d(?P<d>\d+)_K(?P<k>\d+)_s(?P<seed>\d+)\.json$")),
 ]
 
 
@@ -380,6 +383,48 @@ def main():
             print(f"| {D} | {cellstr(noc)} | {cellstr(rev)} | {cellstr(a)} | "
                   f"{a_steps:.2f}/{a_rho:+.2f} | {da} ({sa}) | {cellstr(g)} | "
                   f"{g_steps:.2f}/{g_rho:+.2f} | {dg} ({sg}) |")
+
+    # ---- K-sweep: fixed-K coconut recipe, only K varies -----------------
+    easy_rows = by_family.get("ksweep_easy", [])
+    if easy_rows:
+        print("\n## K-sweep (easy task, branch=0/trap=0, d=128, 2 layers)\n")
+        key = lambda meta, b: int(meta["k"])
+        stats = group_stats(easy_rows, key)
+        print("| K | acc | n |")
+        print("|---|---|---|")
+        for k in sorted(stats):
+            m, s, n, _ = stats[k]
+            print(f"| {k} | {m:.4f} ± {s:.4f} | {n} |")
+        ks = sorted(stats)
+        print("\n| contrast | delta | sigma |")
+        print("|---|---|---|")
+        for a, b in zip(ks[1:], ks[:-1]):
+            ma, sa, na, _ = stats[a]
+            mb, sb, nb, _ = stats[b]
+            sig = welch_sigma(ma, sa, na, mb, sb, nb)
+            print(f"| K={a} vs K={b} | {ma-mb:+.4f} | {abs(sig):.2f} |")
+
+    hard_rows = by_family.get("ksweep_hard", [])
+    if hard_rows:
+        print("\n## K-sweep (hard task, branch=1/trap=1, 2 layers)\n")
+        key = lambda meta, b: (int(meta["d"]), int(meta["k"]))
+        stats = group_stats(hard_rows, key)
+        widths = sorted({d for d, _ in stats})
+        for D in widths:
+            print(f"\n**d_model={D}**\n")
+            print("| K | acc | n |")
+            print("|---|---|---|")
+            ks = sorted(k for d, k in stats if d == D)
+            for k in ks:
+                m, s, n, _ = stats[(D, k)]
+                print(f"| {k} | {m:.4f} ± {s:.4f} | {n} |")
+            print("\n| contrast | delta | sigma |")
+            print("|---|---|---|")
+            for a, b in zip(ks[1:], ks[:-1]):
+                ma, sa, na, _ = stats[(D, a)]
+                mb, sb, nb, _ = stats[(D, b)]
+                sig = welch_sigma(ma, sa, na, mb, sb, nb)
+                print(f"| K={a} vs K={b} | {ma-mb:+.4f} | {abs(sig):.2f} |")
 
 
 if __name__ == "__main__":
