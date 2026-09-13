@@ -35,6 +35,10 @@ PATTERNS = [
     ("ablation_noTrajNoDepth", re.compile(r"^ablate_noTrajNoDepth_s(?P<seed>\d+)\.json$")),
     ("fix", re.compile(
         r"^fix_l(?P<layers>\d+)_d(?P<d>\d+)_(?P<tag>\d+e\d+)_s(?P<seed>\d+)\.json$")),
+    ("fixA", re.compile(
+        r"^fixA_l1_d(?P<d>\d+)_(?P<tag>\d+e\d+)_s(?P<seed>\d+)\.json$")),
+    ("fixG", re.compile(
+        r"^fixG_l1_d(?P<d>\d+)_(?P<tag>\d+e\d+)_s(?P<seed>\d+)\.json$")),
     ("search", re.compile(
         r"^search_(?P<method>nocot|coconut|reverie)_s(?P<seed>\d+)\.json$")),
     ("search_ablation_noTraj", re.compile(r"^search_ablate_noTraj_s(?P<seed>\d+)\.json$")),
@@ -308,6 +312,74 @@ def main():
                 print(f"| {D} | {cellstr(noc)} | {cellstr(rev)} | {cellstr(coc)} | "
                       f"{fm:.4f} ± {fs:.3f} @ {flr:g} (n={fn}) | {steps:.3f} | {rho:+.3f} | "
                       f"{d_noc} | {s_noc} | {d_rev} | {s_rev} |")
+
+
+    # ---- capacity: fixA/fixG (one term dropped at a time), one layer only ---
+    fixA_rows = by_family.get("fixA", [])
+    fixG_rows = by_family.get("fixG", [])
+    if fixA_rows or fixG_rows:
+        print("\n## Capacity (fixA/fixG): one term dropped, one layer only\n")
+
+        def best_per_d(rows):
+            key = lambda meta, b: (int(meta["d"]), tag_to_lr(meta["tag"]))
+            lr_stats = group_stats(rows, key)
+            best: dict = {}
+            for (D, lr), (m, s, n, accs) in lr_stats.items():
+                if D not in best or m > best[D][0]:
+                    best[D] = (m, s, n, accs, lr)
+            meta_rows = {}
+            for meta, blob in rows:
+                k = (int(meta["d"]), tag_to_lr(meta["tag"]))
+                meta_rows.setdefault(k, []).append(blob)
+            return best, meta_rows
+
+        a_best, a_meta = best_per_d(fixA_rows)
+        g_best, g_meta = best_per_d(fixG_rows)
+        lrw_rows = by_family.get("lrw", [])
+        lrw_best = {}
+        if lrw_rows:
+            lrw_key = lambda meta, b: (int(meta["layers"]), int(meta["d"]), meta["method"],
+                                       tag_to_lr(meta["tag"]))
+            lrw_lr_stats = group_stats(lrw_rows, lrw_key)
+            for (L, D, method, lr), (m, s, n, accs) in lrw_lr_stats.items():
+                k = (L, D, method)
+                if k not in lrw_best or m > lrw_best[k][0]:
+                    lrw_best[k] = (m, s, n, accs, lr)
+
+        def cellstr(c):
+            if c is None:
+                return "-"
+            m, s, n, accs, lr = c
+            return f"{m:.4f} ± {s:.3f} @ {lr:g} (n={n})"
+
+        def contrast(a, b):
+            if a is None or b is None:
+                return "-", "-"
+            return f"{a[0]-b[0]:+.4f}", f"{welch_sigma(a[0], a[1], a[2], b[0], b[1], b[2]):+.1f}"
+
+        widths = sorted(set(a_best) | set(g_best))
+        print("| d_model | nocot best (L1) | reverie best (L1) | alpha=0 only | "
+              "steps/rho | vs reverie | gamma=0 only | steps/rho | vs reverie |")
+        print("|---|---|---|---|---|---|---|---|---|")
+        for D in widths:
+            noc = lrw_best.get((1, D, "nocot"))
+            rev = lrw_best.get((1, D, "reverie"))
+            a = a_best.get(D)
+            g = g_best.get(D)
+            a_steps = a_rho = g_steps = g_rho = float("nan")
+            if a:
+                blobs = a_meta[(D, a[4])]
+                a_steps = statistics.fmean(b["test"]["mean_steps"] for b in blobs)
+                a_rho = statistics.fmean(b["test"]["rho_steps_hops"] for b in blobs)
+            if g:
+                blobs = g_meta[(D, g[4])]
+                g_steps = statistics.fmean(b["test"]["mean_steps"] for b in blobs)
+                g_rho = statistics.fmean(b["test"]["rho_steps_hops"] for b in blobs)
+            da, sa = contrast(a, rev)
+            dg, sg = contrast(g, rev)
+            print(f"| {D} | {cellstr(noc)} | {cellstr(rev)} | {cellstr(a)} | "
+                  f"{a_steps:.2f}/{a_rho:+.2f} | {da} ({sa}) | {cellstr(g)} | "
+                  f"{g_steps:.2f}/{g_rho:+.2f} | {dg} ({sg}) |")
 
 
 if __name__ == "__main__":

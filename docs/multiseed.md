@@ -200,31 +200,110 @@ on this task), but it is not evidence that reverie's continuous-latent
 mechanism itself does anything nocot's zero-step baseline doesn't already do
 here.
 
-The actual open question, the two-layer capacity-grid gap, is not answered
-yet. `fix_l{1,2}_d{64,96,128,160,192}_{lr}_s{0..23}` (branch=1/trap-depth=1,
-the harder regime where reverie currently *loses* at two layers) has only
-n=211 total, all of it at **one layer**, thin and not resolved to each
-cell's own best learning rate the way the capacity table above is:
+**Status, updated 2026-09-13 (later the same day): the capacity-grid
+question is answered, and it changes the conclusion above.** The `fix_*`
+family filled to its full ceiling, 960 runs (2 layers x 5 widths x 4 lrs x
+24 seeds), read with `aggregate_opp.py`'s new per-cell-best-lr reader for
+the `fix` family (it only read the easy-task `ablation_noTrajNoDepth` family
+before; that gap is what the "not yet" above was waiting on).
 
-| d_model | n | acc (pooled across the 4 lrs sampled so far) |
-|---|---|---|
-| 64 | 96 | 0.6816 ± 0.0682 |
-| 96 | 96 | 0.6911 ± 0.0670 |
-| 128 | 19 | 0.7528 ± 0.0530 |
+**Two layers, each arm at its own best lr, n=24 for the fix, n=624 for the
+others:**
 
-Zero two-layer cells exist yet. Do not read anything into the one-layer
-numbers above against the earlier "best own lr" table; they are pooled
-across all four sampled rates, not each cell's winner, so they are not
-comparable yet and are not a regression. The `fix_*` family was placed
-ahead of the still-growing `lrw` grid in `make-tasks.sh`'s priority order,
-so it should keep filling from here; re-run `aggregate_opp.py` once
-`l2_*` cells appear.
+| d_model | nocot best | reverie best | fix best | steps | rho | fix vs nocot | fix vs reverie |
+|---|---|---|---|---|---|---|---|
+| 64 | 0.8832 ± 0.019 | 0.8455 ± 0.023 | 0.8814 ± 0.014 | 0.20 | -0.02 | -0.0018 (-0.6σ) | +0.0358 (+12.1σ) |
+| 96 | 0.8910 ± 0.016 | 0.8576 ± 0.020 | 0.8914 ± 0.014 | 0.01 | +0.02 | +0.0004 (+0.1σ) | +0.0338 (+11.7σ) |
+| 128 | 0.8917 ± 0.016 | 0.8611 ± 0.019 | 0.8919 ± 0.013 | 0.79 | -0.13 | +0.0002 (+0.1σ) | +0.0307 (+11.5σ) |
+| 160 | 0.8929 ± 0.015 | 0.8679 ± 0.018 | 0.8963 ± 0.013 | 0.28 | -0.05 | +0.0033 (+1.3σ) | +0.0283 (+10.4σ) |
+| 192 | 0.8939 ± 0.015 | 0.8716 ± 0.019 | 0.8936 ± 0.015 | 0.00 | +0.01 | -0.0003 (-0.1σ) | +0.0220 (+7.2σ) |
 
-`reverie/ensemble.py` (a vmapped multi-seed trainer, verified against
-sequential training to <1e-4 after ten steps, see `tests/test_core.py`) is
-committed and can train a whole `fix_*` cell's 24 seeds in one job instead
-of 24 separate queue entries, which matters more once the two-layer cells
-are the bottleneck than it did for the easy-task result above.
+The two-layer gap is gone, fully, at every width: the fix is a statistical
+tie with nocot everywhere (|sigma| under 1.3) and beats full reverie by
+7-12 sigma at every width. That confirms the diagnosis's prediction. But
+`steps` is 0.00-0.79 at every width and `rho` is noise around zero (even
+negative in two cells) -- same shape as the easy-task result above. The fix
+closes the gap by behaving like nocot here too, not by using reverie's
+mechanism.
+
+**One layer, the regime where full reverie was actually winning (up to 45
+sigma over nocot in the capacity table above) -- this is new, and it is not
+a clean win:**
+
+| d_model | nocot best | reverie best | fix best | steps | rho | fix vs nocot | fix vs reverie |
+|---|---|---|---|---|---|---|---|
+| 64 | 0.7255 ± 0.056 | 0.5993 ± 0.065 | 0.7065 ± 0.064 | 1.43 | -0.18 | -0.0191 (-1.4σ) | +0.1072 (+8.1σ) |
+| 96 | 0.7441 ± 0.051 | 0.7988 ± 0.047 | 0.7350 ± 0.042 | 1.85 | -0.20 | -0.0091 (-1.0σ) | -0.0638 (-7.3σ) |
+| 128 | 0.7644 ± 0.047 | 0.8425 ± 0.037 | 0.7617 ± 0.052 | 1.86 | -0.31 | -0.0027 (-0.3σ) | -0.0809 (-7.5σ) |
+| 160 | 0.7661 ± 0.047 | 0.8560 ± 0.026 | 0.7407 ± 0.037 | 1.86 | -0.36 | -0.0254 (-3.3σ) | -0.1153 (-15.1σ) |
+| 192 | 0.7603 ± 0.048 | 0.8636 ± 0.034 | 0.7449 ± 0.044 | 1.68 | -0.39 | -0.0154 (-1.7σ) | -0.1187 (-13.2σ) |
+
+At d=64 the fix rescues reverie from its own anomalous collapse there (full
+reverie inexplicably loses to nocot by 37 sigma at d=64, one layer; the fix
+recovers most of that, +8.1 sigma over full reverie, though still not
+significantly ahead of nocot). Everywhere else, d=96 through d=192, the fix
+is a wash against nocot (ties or, at d=160, a real 3.3 sigma loss) and loses
+hard to full reverie: 7.3 to 15.1 sigma, worse in absolute terms than the
+two-layer win was good. `steps` is 1.4-1.9 here, not collapsed, but `rho` is
+consistently negative (-0.18 to -0.39), meaning steps move slightly opposite
+to hop count, not with it. Whatever the halt is doing at one layer without
+gamma, it isn't collapsing to zero and it isn't tracking difficulty either.
+
+**So the fix is not a fix, it's a trade.** Alpha and gamma together are a
+tax at two layers (pure cost, gap closes to zero when dropped) and a
+subsidy at one layer (dropping them gives back most of reverie's edge over
+nocot, sometimes reversing it into a loss). Erasing both terms erases
+reverie's mechanism everywhere, which is harmless where the mechanism
+wasn't earning anything and actively bad where it was.
+
+**Does forcing the halt away from collapse buy anything at two layers?**
+Tested directly: `reverie/ensemble.py`, alpha=0, gamma=0, layers=2, d=128,
+lr=1e-3 (the fix's own best lr for this cell), beta_reg swept over
+{0.01, 0.1, 0.3, 1.0, 3.0} (`lambda_prior=0.2` unchanged), 24 seeds each,
+branch=1/trap-depth=1:
+
+| beta | acc | n | mean_steps | rho |
+|---|---|---|---|---|
+| 0.01 | 0.8929 ± 0.0133 | 24 | 0.77 ± 0.20 | -0.120 ± 0.072 |
+| 0.1 | 0.8916 ± 0.0125 | 24 | 4.45 ± 0.06 | +0.001 ± 0.096 |
+| 0.3 | 0.8893 ± 0.0141 | 24 | 4.39 ± 0.05 | +0.068 ± 0.068 |
+| 1.0 | 0.8873 ± 0.0194 | 24 | 4.20 ± 0.05 | +0.056 ± 0.052 |
+| 3.0 | 0.8933 ± 0.0178 | 24 | 4.07 ± 0.04 | +0.070 ± 0.051 |
+
+Going from beta=0.01 to beta=0.1 (10x) is enough to blow the halt open:
+mean_steps jumps from 0.77 (near-collapsed, matching the fix table above)
+to 4.45 (near the geometric prior's target depth, close to K=5). Accuracy
+does not move: 0.887-0.893 across the whole sweep, every value a tie with
+nocot (|sigma| under 1.1) and 6.5-11.4 sigma ahead of full reverie,
+regardless of whether the halt is collapsed or not. Two conclusions. First,
+the two-layer regime is not merely indifferent to *forced* extra
+computation, it is indifferent to *any* computation, collapsed or maxed
+out; the backbone solves the task in one pass and nothing about the latent
+steps matters there, which is the strongest confirmation yet of the
+one-shot-in-two-layers reading. Second, and this is the real negative
+result: `rho` never leaves the range +0.001 to +0.070 across nearly three
+orders of magnitude of beta. Beta is a global depth-bias knob, not an
+adaptivity mechanism -- it moves the mean of the halting distribution but
+never makes it track per-instance difficulty. Cranking the anti-collapse
+prior is not a route to real adaptive halting; only gamma's per-instance
+supervision has ever produced nonzero rho in any run in this doc (+1.000,
+every reverie-full row, phase0 task).
+
+**Next step, queued and running, not yet read.** The combined fix can't say
+which single term the one-layer edge depends on. `make-tasks.sh` now also
+generates `fixA_l1_d{64..192}_{lr}_s{0..23}` (alpha=0 only, gamma kept) and
+`fixG_l1_d{64..192}_{lr}_s{0..23}` (gamma=0 only, alpha kept), one layer
+only since the two-layer question is answered by the beta sweep above and
+doesn't need a term-by-term breakdown. 24 seeds/cell, same as the fix grid,
+placed right after it in priority order. `aggregate_opp.py` has a reader
+for both families (`## Capacity (fixA/fixG)`) ready for when they land. If
+one term turns out to carry the one-layer edge on its own, dropping only
+the other one might close the two-layer gap without the one-layer loss;
+if both matter, there's no single-term fix and the real problem is that
+gamma's exact per-instance pin is currently the only thing in this codebase
+that produces adaptive (rho != 0) halting at all, and something coarser
+than an exact hop-count target (whether to halt at all vs definitely not,
+rather than the precise count) is the next real candidate to build.
 
 ## Why everything before 2026-09-03 was re-run
 
