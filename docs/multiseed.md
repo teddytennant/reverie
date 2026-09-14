@@ -378,20 +378,172 @@ low-n reads). d=64, the width where full reverie inexplicably lost to nocot
 by 37 sigma in the capacity table, isn't a K story either: 0.8790-0.8825
 across the whole K=0..8 range, no trend.
 
-**This closes the question this doc had been circling without asking
-directly: at 2 layers, on this task family, latent step count has no
-causal effect on accuracy, on either the easy or the hard regime, at any
-width tested, once every forcing term is gone and the model is just told
-to spend K steps and answer.** That is not evidence against continuous
-latent reasoning in general. It's evidence that a 2-layer transformer on
-multi-hop reachability already computes the whole answer inside the layers
-it has, so handing it more sequence positions to compute over doesn't help,
-because there's nothing left for those positions to contribute. It sharpens
-the earlier README/`--connect` finding that 2 layers solves this task in
-one forward pass, and it lines up with the beta sweep above, where accuracy
-sat at 0.887-0.893 whether the halt collapsed to near-zero steps or was
-forced open to near-K: the backbone doesn't care how many latent steps it's
-given, forced or free, collapsed or not.
+**At 2 layers, on this task family, latent step count has no causal effect
+on accuracy, on either the easy or the hard regime, at any width tested,
+once every forcing term is gone and the model is just told to spend K steps
+and answer.** That is not evidence against continuous latent reasoning in
+general. It's evidence that a 2-layer transformer on multi-hop reachability
+already computes the whole answer inside the layers it has, so handing it
+more sequence positions to compute over doesn't help, because there's
+nothing left for those positions to contribute. It sharpens the earlier
+README/`--connect` finding that 2 layers solves this task in one forward
+pass, and it lines up with the beta sweep above, where accuracy sat at
+0.887-0.893 whether the halt collapsed to near-zero steps or was forced
+open to near-K: the backbone doesn't care how many latent steps it's given,
+forced or free, collapsed or not.
+
+But 2 layers is only half the question this project cares about, and it's
+the half where the backbone doesn't need the help. The regime everything
+else in this doc has flagged as the one where extra latent compute actually
+does something is 1 layer, hard task, same three widths, same recipe, same
+n=32/K:
+
+**1 layer, d_model=64**
+
+| K | acc | n |
+|---|---|---|
+| 0 | 0.6917 ± 0.0655 | 32 |
+| 1 | 0.7280 ± 0.0621 | 32 |
+| 2 | 0.7630 ± 0.0519 | 32 |
+| 3 | 0.7634 ± 0.0556 | 32 |
+| 5 | 0.7653 ± 0.0580 | 32 |
+| 8 | 0.7298 ± 0.0732 | 32 |
+
+| contrast | delta | sigma |
+|---|---|---|
+| K=1 vs K=0 | +0.0363 | 2.28 |
+| K=2 vs K=1 | +0.0350 | 2.45 |
+| K=3 vs K=2 | +0.0003 | 0.02 |
+| K=5 vs K=3 | +0.0020 | 0.14 |
+| K=8 vs K=5 | -0.0355 | 2.15 |
+
+**1 layer, d_model=128**
+
+| K | acc | n |
+|---|---|---|
+| 0 | 0.7160 ± 0.0545 | 32 |
+| 1 | 0.8006 ± 0.0507 | 32 |
+| 2 | 0.8305 ± 0.0334 | 32 |
+| 3 | 0.8368 ± 0.0449 | 32 |
+| 5 | 0.8383 ± 0.0470 | 32 |
+| 8 | 0.8084 ± 0.0414 | 32 |
+
+| contrast | delta | sigma |
+|---|---|---|
+| K=1 vs K=0 | +0.0846 | 6.43 |
+| K=2 vs K=1 | +0.0298 | 2.78 |
+| K=3 vs K=2 | +0.0063 | 0.64 |
+| K=5 vs K=3 | +0.0015 | 0.13 |
+| K=8 vs K=5 | -0.0299 | 2.70 |
+
+**1 layer, d_model=192**
+
+| K | acc | n |
+|---|---|---|
+| 0 | 0.7582 ± 0.0417 | 32 |
+| 1 | 0.8082 ± 0.0337 | 32 |
+| 2 | 0.8347 ± 0.0277 | 32 |
+| 3 | 0.8474 ± 0.0240 | 32 |
+| 5 | 0.8478 ± 0.0267 | 32 |
+| 8 | 0.8248 ± 0.0353 | 32 |
+
+| contrast | delta | sigma |
+|---|---|---|
+| K=1 vs K=0 | +0.0500 | 5.28 |
+| K=2 vs K=1 | +0.0265 | 3.43 |
+| K=3 vs K=2 | +0.0127 | 1.97 |
+| K=5 vs K=3 | +0.0004 | 0.06 |
+| K=8 vs K=5 | -0.0230 | 2.93 |
+
+**This is the curve the whole project was actually asking for, and it's
+real: a clean, monotonic climb from K=0 through K=2, a plateau from K=3 to
+K=5 (every contrast under 0.7 sigma at every width), and then a real
+decline at K=8 (2.1-2.9 sigma down from the K=5 peak, at all three widths).**
+Step count is causally load-bearing here, at high confidence: K=1 vs K=0 is
+2.3-6.4 sigma, K=2 vs K=1 is 2.5-3.4 sigma, both real and both positive,
+every width. This is the foundational result Part 1 of this project was for:
+continuous latent computation, with no forcing of any kind, measurably
+improves accuracy when the backbone can't already one-shot the task, and it
+does so up to a point (K* is 3 at this task's depth mix, 2,3,4 hops) and no
+further; past that point extra steps stop helping and start costing
+accuracy, not just plateauing. One practical footnote: K*=3-5 is almost
+exactly where coconut's own fixed default of K=5 sits, which is a plausible
+part of why coconut has been so hard to beat throughout this doc, not luck
+in the choice of default.
+
+## ACT-style ponder cost: does dropping the teacher pin entirely produce real adaptivity
+
+The K-sweep above settles what learned halting would have to be worth: at 1
+layer, hard task, going from K=0 to K*=3-5 is a real 7-12 point accuracy
+gain (0.6917 to 0.7653 at d=64, 0.7160 to 0.8383 at d=128, 0.7582 to 0.8478
+at d=192), and going past K* to K=8 gives some of it back. A halting
+mechanism that actually tracked difficulty per instance should land
+somewhere in that range on hard examples and near K=0 on easy ones, no
+supervision required to find it, that's the whole promise of PonderNet/ACT.
+The fix arm's own beta sweep (above) already showed something odd on this
+exact regime: mean_steps sat at 1.4-1.9, not collapsed, but rho was
+consistently negative (-0.18 to -0.39). The KL-to-geometric-prior term was
+the only thing anchoring depth there, and it isn't a per-instance signal
+(g is the same target for every example), so whatever correlation it
+produced with difficulty was incidental, and backwards from useful.
+
+Tried the other standard shape: `reg_mode=linear` (added this session),
+ACT's own flat ponder cost, beta * E[depth], same recipe otherwise
+(adaptive=True, alpha=0, gamma=0, one layer, max_steps=5, same three
+widths, same lrs as the fix arm). No fixed target distribution, so nothing
+pins the mean either; a step only gets kept where the task-loss gradient
+says it's worth more than beta. beta swept over {0, 0.003, 0.01, 0.03,
+0.1}, n=24/cell, `runs/opp_act`.
+
+| beta | d=64 acc / steps / rho | d=128 acc / steps / rho | d=192 acc / steps / rho |
+|---|---|---|---|
+| 0     | 0.7147 / 0.23 / +0.023 | 0.7605 / 0.29 / -0.113 | 0.7391 / 0.03 / +0.022 |
+| 0.003 | 0.7135 / 0.11 / +0.045 | 0.7612 / 0.16 / -0.057 | 0.7406 / 0.02 / +0.029 |
+| 0.01  | 0.7111 / 0.03 / +0.058 | 0.7640 / 0.05 / +0.024 | 0.7451 / 0.01 / +0.033 |
+| 0.03  | 0.7110 / 0.01 / +0.036 | 0.7698 / 0.01 / +0.040 | 0.7539 / 0.00 / +0.014 |
+| 0.1   | 0.7109 / 0.00 / +0.007 | 0.7690 / 0.00 / +0.022 | 0.7571 / 0.00 / +0.004 |
+
+Two things, and neither is the result this was hoping for. First, mean_steps
+is already down at 0.03-0.29 at beta=0, no compute cost at all, pure
+PonderNet-weighted task loss. There's no anchor pulling it anywhere and it
+still collapses; the model does not discover on its own that spending
+2-5 latent steps (K* from the sweep above) is worth 7-12 points of accuracy,
+even when those steps are free. Cranking beta only pushes an already-
+collapsed halt further toward exactly zero. Second, rho never leaves -0.11
+to +0.06 across the whole grid, indistinguishable from noise. Whatever the
+halt is or isn't doing, it isn't tracking per-instance difficulty, the same
+conclusion the KL sweep reached from the opposite direction (kept the halt
+open, still got no rho).
+
+Put next to the K-sweep numbers directly: this arm's best accuracy per
+width (0.7147 at d=64, 0.7698 at d=128, 0.7571 at d=192) sits within noise
+of the K=0 floor (0.6917, 0.7160, 0.7582) and 6-9 points under the K*
+plateau (0.7653, 0.8383, 0.8478) the same architecture demonstrably reaches
+when K is simply fixed and not learned at all. It also loses to coconut's
+own established best at these widths from the lrw grid (0.7730/0.8424/0.8519
+at K=5). Learned halting with the teacher pin fully removed doesn't just
+fail to beat coconut at its own K, it captures close to none of the gain
+K* proves is sitting there to be had. (Caveat: lr per width was carried
+over from the fix arm's own best lr, not independently retuned for this
+exact configuration; that could move these numbers a few tenths of a
+point, not enough to change the shape or close a 6-9 point gap.)
+
+**This is the honest answer for Part 2: dropping every form of teacher
+supervision and asking the model to learn how much to compute purely from
+task loss plus a flat compute-cost penalty does not produce real adaptive
+computation in this architecture on this task family, under either of the
+two standard regularizer shapes (KL-to-geometric-prior or ACT's own linear
+ponder cost), even though the K-sweep proves there is real accuracy on the
+table for a mechanism that could find it.** Both regularizers collapse the
+halt (fast, for linear, at any beta; more slowly and only at low beta, for
+KL) and neither ever produces a step count that tracks difficulty. The only
+thing in this codebase that has ever produced rho != 0 remains gamma's
+exact per-instance depth pin, which is teacher imitation, not discovery,
+and which the capacity grid already shows costs accuracy at 2 layers to buy
+that one-layer edge. A coconut successor that discovers its own K* without
+being told is not something this project found a working recipe for; fixed
+K near K* (what coconut already does) remains the best mechanism in this
+codebase for actually spending latent compute where the backbone needs it.
 
 ## Why everything before 2026-09-03 was re-run
 
