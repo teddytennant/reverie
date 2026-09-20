@@ -1,33 +1,29 @@
 # Reverie
 
-Latent reasoning that decides how long to think, and gets it exactly right.
+[Coconut](https://arxiv.org/abs/2412.06769)-style latent thoughts, plus a PonderNet halt aimed at the teacher's hop count. Every thought is trained to decode to its gold step. One loss, one stage, no RL.
 
-[Coconut](https://arxiv.org/abs/2412.06769) feeds the last hidden state back in as the next input embedding. Reverie supervises every thought to decode to its gold reasoning step, and lets a PonderNet halt pick how many thoughts each problem gets. One loss, one stage, no RL.
+Extra latent steps only help when the backbone cannot one-shot the task. On BFS-verified graph reachability, 0.43M params, ~600 seeds per cell:
+
+- 1 layer, d=192: Reverie 0.864 vs No-CoT 0.761 (+44 sigma)
+- 2 layers: Reverie loses at every width (−23 to −32 sigma)
+
+A two-layer transformer resolves these graphs in one pass. Shrink it to one layer and the same extra thoughts start paying, and the edge grows with width.
+
+The halt still pins. 2 hops get 2.0 steps, 3 get 3.0, 4 get 4.0, ρ = +1.00 on 606 seeds. Drop γ and it collapses to zero steps, which *helps* two-layer accuracy (8 sigma). Calibration is real. It costs.
+
+Toy graphs, binary labels, chance = 0.5. Not language, not scale.
 
 ```
-L =  Σₙ pₙ · CE(answer, W yₙ)          # PonderNet answer loss
-  +  α · Σᵢ CE(path[i], W yᵢ)          # every thought decodes to its gold step
-  +  γ · (−log p_m)                    # halt at the teacher's hop count
+L =  Σₙ pₙ · CE(answer, W yₙ)          # PonderNet answer
+  +  α · Σᵢ CE(path[i], W yᵢ)          # decode each thought
+  +  γ · (−log p_m)                    # halt at teacher depth
   +  β · KL(p ‖ Geometric(λ_prior))    # don't collapse
 ```
-
-γ is the point. The generator knows how many hops each problem needs, so train the halt against that. One MLE term.
-
-It works. 2 hops gets 2.0 steps, 3 gets 3.0, 4 gets 4.0, ρ = +1.00. Not "correlated". Exact, across 606 seeds now, not just one. Kill γ and the halt does not pin to max depth, it pins to zero: the model stops thinking entirely, and at that scale that's a real accuracy win over full Reverie (8 sigma), not a wash. Calibration costs something, and dropping both α and γ turns out to be a trade, not a fix: it closes Reverie's two-layer loss to nocot completely (7-12 sigma, every width) but gives back most of Reverie's one-layer win over nocot too, sometimes turning it into a loss. See [docs/multiseed.md](docs/multiseed.md) for the numbers and what's queued to find out which term the one-layer edge actually needs.
-
-## What didn't work, and what did
-
-No accuracy edge at the default 2-layer width. No-CoT gets 0.847 on the search task with zero reasoning steps, Reverie gets 0.850. I figured it was cheating off component membership and added cross-edges to force real directed reachability (`--connect`). No-CoT went *up*: 0.847 → 0.882 → 0.940 as cross-edges went 0 → 12 → 24. A 2-layer transformer resolves reachability on graphs this small in one pass, so nothing here needs to think twice, and the multi-seed sweep confirms it: Reverie loses to No-CoT at every width tested, 2 layers deep.
-
-Shrink the backbone to one layer and the story flips. A 1-layer transformer can't one-shot this task, and Reverie beats No-CoT at every width past 64, growing from noise at d=96 to 44 sigma at d=192. The extra latent passes only pay for themselves where the backbone actually needs them, and it's real: a beta sweep at two layers shows accuracy there is flat whether the halt is collapsed or maxed out, so the one-shot backbone genuinely doesn't care how much latent compute gets spent, forced or not. Full numbers, and why dropping the forcing terms costs Reverie most of this one-layer edge instead of just fixing the two-layer loss, in [docs/multiseed.md](docs/multiseed.md).
-
-## Run
 
 ```bash
 make install
 make demo      # ~8 min CPU
-make phase0    # the numbers above
 make test
 ```
 
-0.43M params, from scratch. Binary choice, so chance is 0.5. Rust generates the graphs, JAX and Equinox do the rest. Method in [docs/DESIGN.md](docs/DESIGN.md), numbers in [docs/paper.md](docs/paper.md).
+`make phase0` is the original single-seed table. The numbers above are the H200 sweep in [docs/multiseed.md](docs/multiseed.md). Method in [docs/DESIGN.md](docs/DESIGN.md).
